@@ -1,8 +1,9 @@
 streamlit
-astropy
-scipy
-matplotlib
 numpy
-ppxf
+matplotlib
+scipy
+astropy
 dust_extinction
 astroquery
+ppxf
+reportlab
