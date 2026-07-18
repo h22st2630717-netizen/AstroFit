@@ -430,15 +430,19 @@ def create_pdf_report_bytes():
     s_disp = f"{stream['sigma_stars']:.2f}" if stream['sigma_stars'] else "N/A"
     s_mass = f"{stream['M_bh']:.3e}" if stream['M_bh'] else "N/A"
     
+    # ==============================================================================
+    # [문법 오류 해결존] f-string 내부 백슬래시 에러 완전 제어 및 HTML 표기 적용
+    # ==============================================================================
     result_table_data = [
-        [Paragraph("분석 모델 방법론", cell_center_b), Paragraph("핵심 측정 인자", cell_center_b), Paragraph("산출된 블랙홀 질량 ($M_{\odot}$)", cell_center_b)],
+        [Paragraph("분석 모델 방법론", cell_center_b), Paragraph("핵심 측정 인자", cell_center_b), Paragraph("산출된 블랙홀 질량 (M<sub><sub>⊙</sub></sub>)", cell_center_b)],
         [Paragraph("<b>Method 2: Single-Epoch Virial Relation</b><br/>(Hβ Broad-Line Profile)", body_s),
          Paragraph(f"FWHM: {v_fwhm} ± {v_fwhm_err} km/s<br/>L(Hβ): {v_lum} erg/s", body_s),
-         Paragraph(f"{v_mass} $M_{\odot}$<br/>(태양의 {stream.get('str_mass_center','N/A')}배 수준)", body_s)],
-        [Paragraph("<b>Method 3: Bulge Dynamic Scaling</b><br/>($M_{\bullet} - \sigma_*$ Relation)", body_s),
-         Paragraph(f"Stellar Dispersion ($\sigma_*$):<br/>{s_disp} ± {stream.get('sigma_err',0):.2f} km/s", body_s),
-         Paragraph(f"{s_mass} $M_{\odot}$", body_s)]
+         Paragraph(f"{v_mass} M<sub><sub>⊙</sub></sub><br/>(태양의 {stream.get('str_mass_center','N/A')}배 수준)", body_s)],
+        [Paragraph("<b>Method 3: Bulge Dynamic Scaling</b><br/>(M<sub>BH</sub> - σ<sub>*</sub> Relation)", body_s),
+         Paragraph(f"Stellar Dispersion (σ<sub>*</sub>):<br/>{s_disp} ± {stream.get('sigma_err',0):.2f} km/s", body_s),
+         Paragraph(f"{s_mass} M<sub><sub>⊙</sub></sub>", body_s)]
     ]
+    
     t2 = Table(result_table_data, colWidths=[6.5*cm, 5.5*cm, 6*cm])
     t2.setStyle(TableStyle([
         ("GRID", (0,0), (-1,-1), 0.5, colors.black),
@@ -726,9 +730,6 @@ if menu == "1. 마스터 제어판 (Control Panel)":
                         dl_mpc = cosmo.luminosity_distance(redshift).value
                         dl_cm = dl_mpc * 3.08567758e24
 
-                        # ==============================================================================
-                        # [코드 정상 복구선] 잘린 플럭스 및 비리얼 동역학 공식 수렴 연산 전개
-                        # ==============================================================================
                         flux_density_5100 = c0 + c1 * (5100.0 - 4900.0)
                         flux_5100_cgs = flux_density_5100 * 1e-17
                         
@@ -739,7 +740,7 @@ if menu == "1. 마스터 제어판 (Control Panel)":
                         
                         # Greene & Ho (2005)의 Single-Epoch Virial Relation 기반 블랙홀 질량 계산
                         log_M_virial = 6.301 + 0.55 * np.log10(max(1e35, lum_hb_broad) / 1e42) + 2 * np.log10(max(100, fwhm_kms) / 1000)
-                        log_M_virial_err = 0.38 # 고유 통계적 산포 상향 반영
+                        log_M_virial_err = 0.38
                         M_virial = 10**log_M_virial
                         M_virial_err = M_virial * log_M_virial_err * np.log(10)
 
@@ -774,12 +775,11 @@ if menu == "1. 마스터 제어판 (Control Panel)":
                     st.error(f"비리얼 질량 파이프라인 연산 중 치명적 오류 발생: {e}")
 
     # ==============================================================================
-    # 4단계: [신규 추가] 종합 분석 리포트 PDF 빌드 및 실시간 다운로드 컴포넌트
+    # 4단계: 종합 분석 리포트 PDF 최종 발행
     # ==============================================================================
     st.write("---")
     st.markdown("### 4단계: 종합 분석 리포트 PDF 최종 발행")
     
-    # 1단계 전처리가 완수되어 차트가 디스크에 존재하는지 우선 검증 가드
     if st.session_state.pipeline_data_stream.get("is_ready", False):
         try:
             pdf_data = create_pdf_report_bytes()
