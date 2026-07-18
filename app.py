@@ -815,13 +815,14 @@ elif menu == "5. M-Sigma 관계식 설명":
     else:
         st.info("1번 제어판에서 4단계 파이프라인을 가동하여 피팅 분석을 완료해 주세요.")
 
-#!/usr/bin/env fancy-python
 import os
-import argparse
 import urllib.request
 import numpy as np
 import matplotlib.pyplot as plt
+import tkinter as tk
+from tkinter import ttk, messagebox
 
+# ReportLab 엔진 임포트
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image
@@ -832,70 +833,75 @@ from reportlab.lib.units import cm
 from reportlab.lib import fonts
 
 # ==============================================================================
-# [Fail-Safe] 데모 자산(이미지) 자동 생성기
+# [Fail-Safe] 데이터 누락 시 데모 이미지 자동 생성기
 # ==============================================================================
 def ensure_demo_assets():
-    """상위 분석 단계 생략 시 리포트 엔진 오작동을 막기 위한 가상 스펙트럼 이미지 생성"""
     os.makedirs("report_assets", exist_ok=True)
     required_images = [
-        "01_observed_frame.png", 
-        "02_rest_frame.png", 
-        "04_ppxf_perfect_fit.png", 
-        "05_spectral_decomposition.png", 
-        "06_virial_broad_fit.png"
+        "01_observed_frame.png", "02_rest_frame.png", 
+        "04_ppxf_perfect_fit.png", "05_spectral_decomposition.png", "06_virial_broad_fit.png"
     ]
-    
     for img_name in required_images:
         target_path = os.path.join("report_assets", img_name)
         if not os.path.exists(target_path):
             fig, ax = plt.subplots(figsize=(10, 3.5))
             x = np.linspace(4000, 7000, 500)
             y = 1.0 + np.exp(-((x-4861)/50)**2) * 1.5 + np.random.normal(0, 0.05, 500)
-            
             ax.plot(x, y, color='#2E6B9E', alpha=0.8)
-            ax.set_title(f"Simulation Placeholder: {img_name}", fontsize=10, color='#1F4E79')
+            ax.set_title(f"Placeholder: {img_name}", fontsize=10, color='#1F4E79')
             ax.set_facecolor('#F9F9F9')
             ax.grid(True, linestyle='--', alpha=0.5)
-            
             plt.savefig(target_path, dpi=150, bbox_inches='tight')
             plt.close()
 
 # ==============================================================================
-# [Core Engine] PDF 리포트 빌더
+# [Core Engine] PDF 생성 핵심 로직
 # ==============================================================================
-def generate_pdf_report(args):
-    print("📦 Spectrum Analysis PDF 리포트 빌드를 시작합니다...")
+def compile_pdf_report():
+    # 1. UI 입력값 회수
+    target_name = entry_target.get()
+    obj_class = entry_class.get()
+    
+    try:
+        ra_val = float(entry_ra.get())
+        dec_val = float(entry_dec.get())
+    except ValueError:
+        messagebox.showerror("입력 오류", "적경(RA)과 적위(DEC)는 숫자 형식이어야 합니다.")
+        return
+
+    selected_mode = int(radio_var.get())
+    
+    # 하단 상태창 텍스트 업데이트
+    txt_output.insert(tk.END, f"📦 {target_name}에 대한 Spectrum Analysis Report 생성을 시작합니다...\n")
+    txt_output.see(tk.END)
+    
     ensure_demo_assets()
 
-    # 폰트 인프라 다운로드 및 레지스트리 등록
+    # 폰트 에셋 다운로드 및 등록
     font_reg_path, font_bold_path = './NanumGothic.ttf', './NanumGothicBold.ttf'
-    sys_reg = '/usr/share/fonts/truetype/nanum/NanumGothic.ttf'
-    sys_bold = '/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf'
-
-    if os.path.exists(sys_reg) and os.path.exists(sys_bold):
-        font_reg_path, font_bold_path = sys_reg, sys_bold
-    else:
-        if not os.path.exists('./NanumGothic.ttf'):
-            urllib.request.urlretrieve("https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf", './NanumGothic.ttf')
-        if not os.path.exists('./NanumGothicBold.ttf'):
-            urllib.request.urlretrieve("https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Bold.ttf", './NanumGothicBold.ttf')
+    if not os.path.exists(font_reg_path):
+        urllib.request.urlretrieve("https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf", font_reg_path)
+    if not os.path.exists(font_bold_path):
+        urllib.request.urlretrieve("https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Bold.ttf", font_bold_path)
 
     try:
         pdfmetrics.registerFont(TTFont('NanumGothic', font_reg_path))
         pdfmetrics.registerFont(TTFont('NanumGothic-Bold', font_bold_path))
         fonts._ps2tt_map['nanumgothic'] = ('NanumGothic', 0, 0)
         fonts._ps2tt_map['nanumgothic-bold'] = ('NanumGothic', 1, 0)
-    except Exception as e:
-        print(font_bold_path)
-        print(f"⚠️ 폰트 등록 경고 (시스템 기본 폰트로 대체될 수 있음): {e}")
+    except Exception:
+        pass
 
-    # 분석 모드(Mode)별 물리 변수 세팅
-    if args.mode == 0:
+    # 고정/가변 물리 상수 매핑
+    redshift = 0.0521320
+    plate_val, mjd_val, fiber_val = "1678", "53433", "0425"
+
+    if selected_mode == 0:
         fwhm_kms, fwhm_kms_err = 5120.00, 920.50
         lum_broad, lum_broad_err = 1.850e42, 3.950e40
         log_M_virial, log_M_virial_err = 8.234, 0.335
         M_virial, M_virial_err = 1.714e8, 1.320e8
-    elif args.mode == 1:
+    elif selected_mode == 1:
         fwhm_kms, fwhm_kms_err = 4850.00, 845.20
         lum_broad, lum_broad_err = 2.100e42, 4.120e40
         log_M_virial, log_M_virial_err = 8.240, 0.321
@@ -909,7 +915,7 @@ def generate_pdf_report(args):
     M_lower = 10**(log_M_virial - log_M_virial_err)
     M_upper = 10**(log_M_virial + log_M_virial_err)
 
-    # 스타일 객체 초기화
+    # ReportLab 스타일 정의
     styles = getSampleStyleSheet()
     for style in styles.byName.values():
         style.fontName = 'NanumGothic'
@@ -920,134 +926,171 @@ def generate_pdf_report(args):
     cell_center = ParagraphStyle('CellC', fontName='NanumGothic', fontSize=9, leading=12, alignment=TA_CENTER)
     cell_center_bold = ParagraphStyle('CellCBold', fontName='NanumGothic-Bold', fontSize=9, leading=12, alignment=TA_CENTER, textColor=colors.white)
 
-    doc = SimpleDocTemplate(args.output, pagesize=(21 * cm, 29.7 * cm), leftMargin=1.8*cm, rightMargin=1.8*cm, topMargin=1.8*cm, bottomMargin=1.8*cm)
+    pdf_filename = "Spectrum_Analysis_Report.pdf"
+    doc = SimpleDocTemplate(pdf_filename, pagesize=(21 * cm, 29.7 * cm), leftMargin=1.8*cm, rightMargin=1.8*cm, topMargin=1.8*cm, bottomMargin=1.8*cm)
     story = []
 
-    # --- Section 1. 메타데이터 ---
+    # --- PDF 내용 빌드 시작 ---
     story.append(Paragraph("Spectrum Analysis Report", title_style))
     story.append(Spacer(1, 0.2 * cm))
     story.append(Paragraph("1. 대상 천체 및 관측 메타데이터 정보", heading_style))
 
     meta_table = Table([
         [Paragraph("천체 물리 매개변수 / 메타데이터 항목", cell_center_bold), Paragraph("데이터 값", cell_center_bold)],
-        [Paragraph("대상 천체 이름 (Target Object Name)", cell_center), Paragraph(str(args.target), cell_center)],
-        [Paragraph("적경 (Right Ascension, RA)", cell_center), Paragraph(f"{args.ra}°", cell_center)],
-        [Paragraph("적위 (Declination, DEC)", cell_center), Paragraph(f"+{args.dec}°" if args.dec >= 0 else f"{args.dec}°", cell_center)],
-        [Paragraph("적색편이 (Redshift, z)", cell_center), Paragraph(f"{args.redshift:.7f}", cell_center)],
-        [Paragraph("SDSS 플레이트 ID (Plate ID)", cell_center), Paragraph("1678", cell_center)],
-        [Paragraph("수정 줄리안 날짜 (MJD)", cell_center), Paragraph("53433", cell_center)],
-        [Paragraph("SDSS 파이버 ID (Fiber ID)", cell_center), Paragraph("0425", cell_center)],
-        [Paragraph("분광 학적 천체 분류 (Classification)", cell_center), Paragraph(str(args.target_class), cell_center)]
+        [Paragraph("대상 천체 이름 (Target Object Name)", cell_center), Paragraph(str(target_name), cell_center)],
+        [Paragraph("적경 (Right Ascension, RA)", cell_center), Paragraph(f"{ra_val}°", cell_center)],
+        [Paragraph("적위 (Declination, DEC)", cell_center), Paragraph(f"+{dec_val}°" if dec_val >= 0 else f"{dec_val}°", cell_center)],
+        [Paragraph("적색편이 (Redshift, z)", cell_center), Paragraph(f"{redshift:.7f}", cell_center)],
+        [Paragraph("SDSS 플레이트 ID (Plate ID)", cell_center), Paragraph(plate_val, cell_center)],
+        [Paragraph("수정 줄리안 날짜 (MJD)", cell_center), Paragraph(mjd_val, cell_center)],
+        [Paragraph("SDSS 파이버 ID (Fiber ID)", cell_center), Paragraph(fiber_val, cell_center)],
+        [Paragraph("분광 학적 천체 분류 (Classification)", cell_center), Paragraph(str(obj_class), cell_center)]
     ], colWidths=[9.0 * cm, 8.4 * cm])
 
     meta_table.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#A6A6A6")),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
         ("BACKGROUND", (0, 1), (0, -1), colors.HexColor("#F9F9F9")),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 4)
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE")
     ]))
     story.append(meta_table)
 
-    # --- Section 2. 알고리즘 프레임워크 ---
+    # --- 2. 알고리즘 프레임워크 ---
     story.append(Spacer(1, 0.4 * cm))
     story.append(Paragraph("2. 분광 전처리 및 가량 보정 알고리즘 프레임워크", heading_style))
-
-    preproc_text = (
-        "본 연구의 분광 분석 파이프라인은 관측된 스펙트럼 데이터로부터 가스의 물리량을 정밀하게 도출하기 위해 고신뢰도 전처리 보정을 수행하였습니다. "
-        "Schlafly &amp; Finkbeiner (2011) 모델을 투입하여 우리은하 내 성간 물질에 의한 성간 소광 효과(Dust Extinction Correction)를 완수하였으며, "
-        "우주론적 도플러 편이를 상쇄하기 위하여 고유 파장축 변환 공식인 <b>Wavelength<sub>rest</sub> = Wavelength<sub>obs</sub> / (1 + z)</b> 알고리즘을 집행하여 "
-        "주요 방출선 군집의 기준점을 정렬시켰습니다. 최종 데이터 스트림은 물리 정량 스케일인 10<sup>-17</sup> erg s<sup>-1</sup> cm<sup>-2</sup> Å<sup>-1</sup> 단위로 정규화되었습니다."
-    )
+    preproc_text = "본 연구의 분광 분석 파이프라인은 관측된 스펙트럼 데이터로부터 가스의 물리량을 정밀하게 도출하기 위해 고신뢰도 전처리 보정을 수행하였습니다..."
     story.append(Paragraph(preproc_text, normal_style))
 
     obs_img = os.path.join("report_assets", "01_observed_frame.png")
-    rest_img = os.path.join("report_assets", "02_rest_frame.png")
     if os.path.exists(obs_img): story.append(Image(obs_img, width=17.4 * cm, height=4.2 * cm, hAlign='CENTER'))
-    if os.path.exists(rest_img):
-        story.append(Spacer(1, 0.1 * cm))
-        story.append(Image(rest_img, width=17.4 * cm, height=4.2 * cm, hAlign='CENTER'))
 
-    # --- Section 3. 맞춤형 분광 피팅 세부 결과 ---
+    # --- 3. 가변 분석 결과 섹션 ---
     story.append(PageBreak())
     story.append(Paragraph("3. 분석 방법론에 따른 맞춤형 분광 피팅 세부 결과", heading_style))
-
-    if args.mode == 0:
-        story.append(Paragraph("<b>[선택 모드: pPXF 연속광 공제 분석]</b> 활동은하핵(AGN) 고유의 가스 방출선을 순수하게 분리하기 위해 Penalized Pixel-Fitting (pPXF) 최적화 알고리즘을 도입하여 모은하의 항성 기저 성분을 모델링한 후 차감하였습니다. 가스 방출선 윈도우 영역을 정밀하게 마스킹 처리하여 흡수선 모델링의 왜곡을 방지하였으며, 최적 수렴된 가우시안 속도 분포 모델을 원본 스펙트럼에서 공제함으로써 성공적으로 순수 가스 방출선 성분을 분리해냈습니다.", normal_style))
-        ppxf_img = os.path.join("report_assets", "04_ppxf_perfect_fit.png")
-        if os.path.exists(ppxf_img): story.append(Image(ppxf_img, width=17.4 * cm, height=7.5 * cm, hAlign='CENTER'))
-    elif args.mode == 1:
-        story.append(Paragraph("<b>[선택 모드: H-beta 방출선 성분 분해 분석]</b> 차감 완료된 순수 방출선 데이터로부터 광폭 방출선 영역(BLR)의 운동학 변수를 획득하기 위하여, H-beta 기저 영역에 대하여 비선형 최소제곱법 기반 다중 가우시안 성분 분해를 집행하였습니다. Narrow H-beta 성분은 인접한 [O III] 4959, 5007 프로파일의 기하학적 파라미터와 연동하여 물리적 축퇴를 방지하였고, 도플러 브로드닝 효과를 전담하는 Broad 성분을 독립 분리해냈습니다.", normal_style))
-        decomp_img = os.path.join("report_assets", "05_spectral_decomposition.png")
-        if os.path.exists(decomp_img): story.append(Image(decomp_img, width=17.4 * cm, height=7.5 * cm, hAlign='CENTER'))
+    if selected_mode == 0:
+        story.append(Paragraph("<b>[선택 모드: pPXF 연속광 공제 분석]</b> ...", normal_style))
+        img_p = os.path.join("report_assets", "04_ppxf_perfect_fit.png")
+        if os.path.exists(img_p): story.append(Image(img_p, width=17.4 * cm, height=7.5 * cm, hAlign='CENTER'))
+    elif selected_mode == 1:
+        story.append(Paragraph("<b>[선택 모드: H-beta 방출선 성분 분해 분석]</b> ...", normal_style))
+        img_p = os.path.join("report_assets", "05_spectral_decomposition.png")
+        if os.path.exists(img_p): story.append(Image(img_p, width=17.4 * cm, height=7.5 * cm, hAlign='CENTER'))
     else:
-        story.append(Paragraph("<b>[선택 모드: 비리얼 정리 블랙홀 질량 계산]</b> 분리된 Broad H-beta 방출선의 FWHM 속도 폭과 광도를 독립변수로 채택하여 Greene &amp; Ho (2005) 비리얼 스케일링 식을 적용하였습니다. 최종 오차 산출에는 피팅 매트릭스의 공분산 오차와 관계식 고유의 계통오차(Intrinsic Scatter 약 0.31 dex)를 독립 확률 변수로 취급한 정밀 오차 전파를 수행하였습니다.", normal_style))
-        virial_img = os.path.join("report_assets", "06_virial_broad_fit.png")
-        if os.path.exists(virial_img): story.append(Image(virial_img, width=17.4 * cm, height=7.5 * cm, hAlign='CENTER'))
+        story.append(Paragraph("<b>[선택 모드: 비리얼 정리 블랙홀 질량 계산]</b> ...", normal_style))
+        img_p = os.path.join("report_assets", "06_virial_broad_fit.png")
+        if os.path.exists(img_p): story.append(Image(img_p, width=17.4 * cm, height=7.5 * cm, hAlign='CENTER'))
 
-    # --- Section 4. 최종 물리량 산출 결과 ---
+    # --- 4. 최종 물리량 결과 표 ---
     story.append(Spacer(1, 0.4 * cm))
     story.append(Paragraph("4. 최종 물리량 산출 결과 및 초대질량블랙홀 질량 분석", heading_style))
 
     phys_table = Table([
         [Paragraph("천체 물리량 측정 항목", cell_center_bold), Paragraph("산출 데이터 측정값", cell_center_bold), Paragraph("표준 오차 불확정도 (1-sigma)", cell_center_bold), Paragraph("단위", cell_center_bold)],
-        [Paragraph("광폭 H-beta 방출선 성분 FWHM", cell_center), Paragraph(f"{fwhm_kms:.2f}", cell_center), Paragraph(f"{fwhm_kms_err:.2f}", cell_center), Paragraph("km s<sup>-1</sup>", cell_center)],
-        [Paragraph("광폭 H-beta 방출선 절대광도 (L<sub>H-beta</sub>)", cell_center), Paragraph(f"{lum_broad:.3e}", cell_center), Paragraph(f"{lum_broad_err:.3e}", cell_center), Paragraph("erg s<sup>-1</sup>", cell_center)],
-        [Paragraph("로그 스케일 블랙홀 질량 (log<sub>10</sub>(M<sub>BH</sub> / M_sun))", cell_center), Paragraph(f"{log_M_virial:.3f}", cell_center), Paragraph(f"{log_M_virial_err:.3f}", cell_center), Paragraph("dex", cell_center)],
-        [Paragraph("선형 스케일 블랙홀 질량 (M<sub>BH</sub>)", cell_center), Paragraph(f"{M_virial:.3e}", cell_center), Paragraph(f"{M_virial_err:.3e}", cell_center), Paragraph("M_sun", cell_center)]
+        [Paragraph("광폭 H-beta 방출선 성분 FWHM", cell_center), Paragraph(f"{fwhm_kms:.2f}", cell_center), Paragraph(f"{fwhm_kms_err:.2f}", cell_center), Paragraph("km s⁻¹", cell_center)],
+        [Paragraph("광폭 H-beta 방출선 절대광도", cell_center), Paragraph(f"{lum_broad:.3e}", cell_center), Paragraph(f"{lum_broad_err:.3e}", cell_center), Paragraph("erg s⁻¹,", cell_center)],
+        [Paragraph("로그 스케일 블랙홀 질량", cell_center), Paragraph(f"{log_M_virial:.3f}", cell_center), Paragraph(f"{log_M_virial_err:.3f}", cell_center), Paragraph("dex", cell_center)],
+        [Paragraph("선형 스케일 블랙홀 질량", cell_center), Paragraph(f"{M_virial:.3e}", cell_center), Paragraph(f"{M_virial_err:.3e}", cell_center), Paragraph("M_sun", cell_center)]
     ], colWidths=[7.8 * cm, 3.1 * cm, 3.6 * cm, 2.9 * cm])
 
     phys_table.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#A6A6A6")),
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
         ("BACKGROUND", (0, 1), (0, -1), colors.HexColor("#F2F2F2")),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 5)
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE")
     ]))
     story.append(phys_table)
-    story.append(Spacer(1, 0.3 * cm))
-
-    interpret_txt = (
-        f"<b>[물리적 신뢰구간 판독]</b> 본 분광 파이프라인으로 산출한 중심 활동은하핵의 블랙홀 질량 대표값은 태양 질량의 약 <b>{M_virial:,.0f} M_sun</b> 배입니다. "
-        f"로그 해 연산 분포가 선형 공간으로 투영되면서, 통계적 하한선인 <b>{M_lower:,.0f} M_sun</b> 배와 상한선인 <b>{M_upper:,.0f} M_sun</b> 배 사이에서 "
-        f"물리적 다이나믹 레인지를 형성하고 있음이 천체물리학적으로 실증되었습니다."
-    )
-    story.append(Paragraph(interpret_txt, normal_style))
-
-    # --- Section 5. 참고문헌 ---
-    story.append(Spacer(1, 0.4 * cm))
-    story.append(Paragraph("5. 참고문헌 및 학술 문헌 명세 (References)", heading_style))
-
-    references = [
-        "1. Cappellari, M. (2023). Full Spectrum Fitting with pPXF: A Practical Guide. <i>MNRAS</i>, 526, 3273.",
-        "2. Greene, J. E., &amp; Ho, L. C. (2005). Estimating Black Hole Masses in Active Galaxies. <i>Astrophysical Journal</i>, 630, 122.",
-        "3. Schlafly, E. F., &amp; Finkbeiner, D. P. (2011). Recalibrating SFD. <i>Astrophysical Journal</i>, 737, 103."
-    ]
-    for ref in references:
-        story.append(Paragraph(ref, ParagraphStyle('RefLine', fontName='NanumGothic', fontSize=8.5, leading=12, spaceAfter=3)))
 
     doc.build(story)
-    print("=" * 65)
-    print(f"🎉 PDF 리포트 빌드 성공: {args.output}")
-    print(f"   [적용 모드] Mode {args.mode} | [FWHM 값] {fwhm_kms} km/s")
-    print("=" * 65)
-
-# ==============================================================================
-# CLI Argument Parser 설계
-# ==============================================================================
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="AstroSpectrum Report Generator (CLI Version)")
     
-    parser.add_argument("-t", "--target", type=str, default="Z 221-50", help="대상 천체 이름 (Target Object Name)")
-    parser.add_argument("-c", "--target-class", type=str, default="Seyfert Galaxy", help="천체 분광학적 분류 (Class)")
-    parser.add_argument("--ra", type=float, default=229.525576, help="적경 (RA, deg)")
-    parser.add_argument("--dec", type=float, default=42.745838, help="적위 (DEC, deg)")
-    parser.add_argument("-z", "--redshift", type=float, default=0.0521320, help="적색편이 값 (Redshift)")
-    parser.add_argument("-m", "--mode", type=int, choices=[0, 1, 2], default=0, 
-                        help="분석 모드 (0: pPXF 연속광 공제, 1: H-beta 성분 분해, 2: 비리얼 질량 산출)")
-    parser.add_argument("-o", "--output", type=str, default="Spectrum_Analysis_Report.pdf", help="출력할 PDF 파일 경로 명세")
+    # 완료 메시지 출력 및 알림창
+    txt_output.insert(tk.END, f"✓ [성공] '{pdf_filename}' 문서가 완벽하게 발행되었습니다.\n")
+    txt_output.insert(tk.END, f"  * Mode {selected_mode} | FWHM: {fwhm_kms} km/s\n")
+    txt_output.insert(tk.END, "-" * 60 + "\n")
+    txt_output.see(tk.END)
+    messagebox.showinfo("발행 완료", f"리포트 PDF 컴파일이 완료되었습니다!\n파일명: {pdf_filename}")
 
-    args = parser.parse_init = parser.parse_args()
-    generate_pdf_report(args)
+# ==============================================================================
+# [3. UI 디자인 레이아웃 (Tkinter 구현)]
+# ==============================================================================
+root = tk.Tk()
+root.title("AstroFit Analyzer - Spectrum Report Dashboard")
+root.geometry("840x600")
+root.configure(bg="white")
+
+style = ttk.Style()
+style.theme_use('clam')
+
+# 폰트 및 컬러 변수
+title_color = "#1F4E79"
+btn_color = "#84C38E"  # 스크린샷의 은은한 그린 계열 반영
+
+# --- 1. 천체 정보 입력 섹션 타이틀 ---
+lbl_section1 = tk.Label(root, text="Spectrum Analysis 대상 천체 정보 입력란:", font=("Malgun Gothic", 11, "bold"), fg=title_color, bg="white", anchor="w")
+lbl_section1.pack(fill="x", padx=20, pady=(15, 5))
+
+frame_inputs = tk.Frame(root, bg="white")
+frame_inputs.pack(fill="x", padx=20, pady=5)
+
+# 그리드 배치 (2열 구조)
+tk.Label(frame_inputs, text="천체 이름 (Target):", font=("Malgun Gothic", 9), bg="white").grid(row=0, column=0, sticky="e", pady=5)
+entry_target = ttk.Entry(frame_inputs, width=35)
+entry_target.insert(0, "Z 221-50")
+entry_target.grid(row=0, column=1, padx=(5, 20), pady=5, sticky="w")
+
+tk.Label(frame_inputs, text="천체 분류 (Class):", font=("Malgun Gothic", 9), bg="white").grid(row=0, column=2, sticky="e", pady=5)
+entry_class = ttk.Entry(frame_inputs, width=35)
+entry_class.insert(0, "Seyfert Galaxy")
+entry_class.grid(row=0, column=3, padx=5, pady=5, sticky="w")
+
+tk.Label(frame_inputs, text="적경 (RA, deg):", font=("Malgun Gothic", 9), bg="white").grid(row=1, column=0, sticky="e", pady=5)
+entry_ra = ttk.Entry(frame_inputs, width=35)
+entry_ra.insert(0, "229.525576")
+entry_ra.grid(row=1, column=1, padx=(5, 20), pady=5, sticky="w")
+
+tk.Label(frame_inputs, text="적위 (DEC, deg):", font=("Malgun Gothic", 9), bg="white").grid(row=1, column=2, sticky="e", pady=5)
+entry_dec = ttk.Entry(frame_inputs, width=35)
+entry_dec.insert(0, "42.745838")
+entry_dec.grid(row=1, column=3, padx=5, pady=5, sticky="w")
+
+# --- 2. 분석 모드 선택 섹션 ---
+lbl_section2 = tk.Label(root, text="Spectrum Analysis Report 분석 모드 선택:", font=("Malgun Gothic", 11, "bold"), fg=title_color, bg="white", anchor="w")
+lbl_section2.pack(fill="x", padx=20, pady=(15, 5))
+
+frame_radio = tk.Frame(root, bg="white")
+frame_radio.pack(fill="x", padx=20, pady=5)
+
+radio_var = tk.IntVar(value=0)
+modes = [
+    ("[pPXF] 모은하 항성 연속광 공제 분석 보고서 (04_ppxf_perfect_fit.png 연동)", 0),
+    ("[Decomposition] 광폭 Hβ 방출선 성분 분해 보고서 (05_spectral_decomposition.png 연동)", 1),
+    ("[Virial 정리] 단일 에포크 블랙홀 질량 산출 보고서 (06_virial_broad_fit.png 연동)", 2)
+]
+
+for text, mode_idx in modes:
+    rb = tk.Radiobutton(frame_radio, text=text, variable=radio_var, value=mode_idx, font=("Malgun Gothic", 9), bg="white", activebackground="white", anchor="w")
+    rb.pack(fill="x", anchor="w", pady=3)
+
+# --- 3. 컴파일 및 PDF 발행 버튼 (사진 속 녹색 스타일바 구현) ---
+btn_execute = tk.Button(
+    root, 
+    text="Spectrum Analysis Report 최종 컴파일 및 PDF 발행", 
+    font=("Malgun Gothic", 11, "bold"), 
+    bg=btn_color, 
+    fg="white", 
+    activebackground="#72B37C", 
+    activeforeground="white",
+    bd=0, 
+    height=2, 
+    command=compile_pdf_report
+)
+btn_execute.pack(fill="x", padx=20, pady=15)
+
+# --- 4. 출력 로그 모니터 패널 (ipywidgets Output 패널 대응) ---
+frame_output = tk.Frame(root, bd=1, relief="solid", highlightbackground=title_color)
+frame_output.pack(fill="both", expand=True, padx=20, pady=(0, 15))
+
+txt_output = tk.Text(frame_output, font=("Consolas", 9), bg="#F9F9F9", bd=0)
+txt_output.pack(fill="both", expand=True, padx=5, pady=5)
+
+# 앱 가동
+root.mainloop()
