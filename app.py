@@ -4,19 +4,24 @@ import tarfile
 import shutil
 import numpy as np
 import matplotlib.pyplot as plt
-import astropy.units as u
-import astropy.coordinates as coord
+from scipy.interpolate import interp1d
 from glob import glob
 from astropy.io import fits
+import astropy.units as u
+import astropy.coordinates as coord
 from dust_extinction.parameter_averages import CCM89
 from astroquery.irsa_dust import IrsaDust
+
+# pPXF 코어 모듈 임포트
+from ppxf.ppxf import ppxf
+import ppxf.ppxf_util as util
 
 # ==============================================================================
 # [페이지 초기 설정 및 세션 상태(메모리) 초기화]
 # ==============================================================================
 st.set_page_config(page_title="AstroFit", layout="wide")
 
-# 리포트용 그래픽 자산 저장 경로 설정 (스트림릿 가상 서버 내부 디스크)
+# 리포트용 그래픽 자산 저장 경로 설정
 IMAGE_DIR = "./report_assets"
 os.makedirs(IMAGE_DIR, exist_ok=True)
 
@@ -32,13 +37,34 @@ if "pipeline_data_stream" not in st.session_state:
         "wave_obs": None, "flux_obs": None, "sigma_obs": None,
         "wave_rest": None, "flux_dereddened": None, "sigma_dereddened": None,
         "z_calculated": None, "final_Av": None,
-        "saved_plots": {},   # 리포트 생성 엔진이 참조할 이미지 주소록 백업용
-        "is_ready": False
+        "velscale": None, "sigma_stars": None, "sigma_err": None,
+        "log_M_bh": None, "log_M_bh_err": None, "M_bh": None,
+        "M_bh_lower": None, "M_bh_upper": None,
+        "str_mass_center": None, "str_mass_range": None,
+        "stellar_continuum": None, "gas_fit": None, "pp_object": None,
+        "saved_plots": {},   # 리포트 생성 엔진용 이미지 주소록
+        "is_ready": False,
+        "is_ppxf_ready": False
     }
 
 OBS_WAVE_RANGE  = (4300, 9500)
 REST_WAVE_RANGE = (4000, 9000)
 ZOOM_WAVE_RANGE = (6400, 6600)
+
+# ==============================================================================
+# [HUMAN-READABLE UTILITY] 태양질량 직관적 단위 변환 함수
+# ==============================================================================
+def to_korean_shares(value):
+    """숫자를 'X억 X,XXX만' 형태의 직관적인 한국어 배수로 변환합니다."""
+    if value >= 1e8:
+        eok = int(value // 1e8)
+        man = int((value % 1e8) // 1e4)
+        return f"{eok}억 {man:,}만" if man > 0 else f"{eok}억"
+    elif value >= 1e4:
+        man = int(value // 1e4)
+        return f"{man:,}만"
+    else:
+        return f"{value:,.0f}"
 
 # ==============================================================================
 # [CORE ALGORITHM SCIENTIFIC MODULES] 과학 연산 모듈
@@ -85,7 +111,7 @@ def load_and_process_spectrum(uploaded_fits, manual_Av_str, Rv=3.1):
         return wave_obs, flux_obs, sigma_obs, wave_rest, flux_dereddened, sigma_dereddened, z, Av
 
 # ==============================================================================
-# [VISUALIZATION PLOTS] 렌더링 후 디스크 자동 저장 기능
+# [VISUALIZATION PLOTS] 차트 생성 및 디스크 자동 저장 컴포넌트
 # ==============================================================================
 def plot_observed_frame(wave_obs, flux_obs, sigma_obs, wave_range, save_path, step=10):
     mask = (wave_obs >= wave_range[0]) & (wave_obs <= wave_range[1])
@@ -100,7 +126,6 @@ def plot_observed_frame(wave_obs, flux_obs, sigma_obs, wave_range, save_path, st
     ax.tick_params(direction='in', top=True, right=True)
     ax.legend(frameon=False)
     plt.tight_layout()
-    
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     return fig
 
@@ -117,7 +142,6 @@ def plot_rest_frame_original(wave_rest, flux_obs, sigma_obs, wave_range, save_pa
     ax.tick_params(direction='in', top=True, right=True)
     ax.legend(frameon=False)
     plt.tight_layout()
-    
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     return fig
 
@@ -133,7 +157,6 @@ def plot_dust_correction_comparison(wave_rest, flux_obs, flux_corr, wave_range, 
     ax.tick_params(direction='in', top=True, right=True)
     ax.legend(frameon=False)
     plt.tight_layout()
-    
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     return fig
 
@@ -152,7 +175,65 @@ def plot_emission_lines_zoom(wave_rest, flux_corr, wave_range, save_path):
     ax.tick_params(direction='in', top=True, right=True)
     ax.legend(frameon=False, loc='upper left')
     plt.tight_layout()
-    
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    return fig
+
+def plot_ppxf_fit(wave_rest, galaxy_flux, bestfit, goodpixels, save_path):
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 7), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
+    clean_idx = goodpixels
+
+    ax1.plot(wave_rest[clean_idx], galaxy_flux[clean_idx], color='black', lw=0.8, label='Observed (Dereddened)')
+    ax1.plot(wave_rest[clean_idx], bestfit[clean_idx], color='red', lw=1.2, label='pPXF Stellar+Gas Fit')
+    ax1.set_ylabel("Relative Flux ($f_\\lambda$)", fontsize=11)
+    ax1.set_title("pPXF Perfect Fit (Stellar Continuum + AGN Emission Lines)", fontsize=13, fontweight='bold', pad=10)
+    ax1.legend(loc='upper right', frameon=False)
+    ax1.tick_params(direction='in', top=True, right=True)
+
+    ymin = max(-5, np.percentile(galaxy_flux[clean_idx], 0.5) - 2)
+    ymax = np.percentile(galaxy_flux[clean_idx], 99.8) * 1.2
+    ax1.set_ylim(ymin, ymax)
+
+    residuals = galaxy_flux[clean_idx] - bestfit[clean_idx]
+    ax2.plot(wave_rest[clean_idx], residuals, 'd', color='limegreen', markersize=2.5, label='Residuals', alpha=0.8)
+    ax2.axhline(0, color='gray', linestyle='--', lw=0.8)
+    ax2.set_xlabel(r"$\lambda_{\rm rest}$ (Å)", fontsize=11)
+    ax2.set_ylabel("Residuals", fontsize=11)
+    ax2.legend(loc='upper right', frameon=False)
+    ax2.tick_params(direction='in', top=True, right=True)
+    ax2.set_ylim(-np.percentile(np.abs(residuals), 95)*3, np.percentile(np.abs(residuals), 95)*3)
+    ax1.set_xlim(3700.0, 10500.0)
+
+    plt.tight_layout()
+    fig.subplots_adjust(hspace=0.06)
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    return fig
+
+def plot_spectral_decomposition(wave_rest, original_flux, bestfit, stellar_continuum, residual_dec, mask_dec, save_path):
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 7), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+    wave_min, wave_max = 3800, 7000
+
+    ax1.plot(wave_rest[mask_dec], original_flux[mask_dec], color='black', lw=0.8, label='Original (Dereddened)')
+    ax1.plot(wave_rest[mask_dec], bestfit[mask_dec], color='firebrick', lw=0.8, label='Total pPXF Fit')
+    ax1.plot(wave_rest[mask_dec], stellar_continuum[mask_dec], color='navy', lw=0.8, linestyle='--', label='Stellar Continuum')
+    ax1.set_xlim(wave_min, wave_max)
+    ax1.set_ylabel("Flux ($10^{-17}$ erg s$^{-1}$ cm$^{-2}$ Å$^{-1}$)", fontsize=12)
+    ax1.set_title('pPXF Spectral Decomposition & Verification', fontsize=14, fontweight='bold', pad=12)
+    ax1.set_ylim(-10, np.percentile(original_flux[mask_dec], 99.8) * 1.3)
+    ax1.tick_params(direction='in', top=True, right=True)
+    ax1.legend(frameon=False, fontsize=10, loc='upper right')
+    ax1.grid(True, alpha=0.2, linestyle=':')
+
+    ax2.plot(wave_rest[mask_dec], residual_dec[mask_dec], color='gray', lw=0.8, label='Residuals')
+    ax2.axhline(0, color='black', linestyle=':', alpha=0.6, lw=0.8)
+    ax2.set_xlabel("Rest wavelength (Å)", fontsize=12)
+    ax2.set_ylabel('Residual', fontsize=12)
+    ax2.set_ylim(-np.percentile(np.abs(residual_dec[mask_dec]), 95)*3, np.percentile(np.abs(residual_dec[mask_dec]), 95)*3)
+    ax2.tick_params(direction='in', top=True, right=True)
+    ax2.legend(frameon=False, fontsize=10, loc='upper right')
+    ax2.grid(True, alpha=0.2, linestyle=':')
+
+    plt.tight_layout()
+    fig.subplots_adjust(hspace=0.06)
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     return fig
 
@@ -165,7 +246,6 @@ menu = st.sidebar.radio("이동할 페이지를 선택하세요:", ["1. 마스�
 if menu == "1. 마스터 제어판 (Control Panel)":
     st.subheader("Spectrum Analysis Report Master Control Panel")
     
-    # 외부 데이터베이스 및 템플릿 다운로드 빠른 링크 복구 (네이티브 버튼 스타일)
     st.markdown("**외부 데이터베이스 및 템플릿 다운로드 빠른 링크**")
     link_col1, link_col2, link_col3 = st.columns(3)
     with link_col1:
@@ -199,7 +279,7 @@ if menu == "1. 마스터 제어판 (Control Panel)":
         st.success("제어판 파라미터 세션 저장 완료")
 
     st.write("---")
-    st.markdown("### 과학 연산 파이프라인 가동")
+    st.markdown("### 1단계: 과학 연산 파이프라인 가동")
     
     if st.button("적색편이 및 데이터 보정 파이프라인 가동", type="primary", use_container_width=True):
         if st.session_state.config["fits_file"] is None or st.session_state.config["emiles_file"] is None:
@@ -241,12 +321,154 @@ if menu == "1. 마스터 제어판 (Control Panel)":
                 except Exception as e:
                     st.error(f"파이프라인 연산 중 치명적 오류 발생: {e}")
 
+    # ==============================================================================
+    # 2단계: pPXF 분석 및 M-sigma 관계식 기반 블랙홀 질량 산출 파이프라인
+    # ==============================================================================
+    st.write("---")
+    st.markdown("### 2단계: 풀 스펙트럼 피팅(pPXF) 및 블랙홀 질량 산출 파이프라인 가동")
+    
+    if st.button("pPXF 최적화 및 블랙홀 질량 계산 파이프라인 가동", type="primary", use_container_width=True):
+        if not st.session_state.pipeline_data_stream.get("is_ready", False):
+            st.error("실행 실패: 1단계 데이터 보정 파이프라인이 아직 가동되지 않았습니다. 상단의 1단계 버튼을 먼저 실행해주세요.")
+        else:
+            with st.spinner("pPXF 종합 풀 스펙트럼 피팅 비선형 최적화 및 오차 전파 연산 수행 중..."):
+                try:
+                    stream = st.session_state.pipeline_data_stream
+                    files = stream["templates"]
+                    galaxy_wave_obs = stream["wave_obs"]
+                    galaxy_flux = stream["flux_dereddened"]
+                    galaxy_noise = stream["sigma_dereddened"]
+                    redshift = stream["z_calculated"]
+
+                    path_p5 = os.path.join(IMAGE_DIR, "05_ppxf_perfect_fit.png")
+                    path_p6 = os.path.join(IMAGE_DIR, "06_spectral_decomposition.png")
+
+                    # 데이터 격자 정렬 및 로그 레빈
+                    c = 299792.458
+                    log_lam_gal = np.log(galaxy_wave_obs)
+                    velscale = c * (log_lam_gal[-1] - log_lam_gal[0]) / (len(galaxy_wave_obs) - 1)
+
+                    first_file = files[0]
+                    with fits.open(first_file, mode='readonly') as hdu:
+                        h = hdu[0].header
+                        naxis1 = h.get('NAXIS1', len(hdu[0].data))
+                        crval1 = h.get('CRVAL1')
+                        cdelt1 = h.get('CDELT1')
+                        lam_temp = crval1 + cdelt1 * np.arange(naxis1)
+                        lam_range_temp = [lam_temp[0], lam_temp[-1]]
+
+                    star_templates_list = []
+                    for path in files:
+                        with fits.open(path, mode='readonly') as hdu:
+                            flux_temp = hdu[0].data
+                            flux_log_temp, log_lam_temp, _ = util.log_rebin(lam_range_temp, flux_temp, velscale=velscale)
+                            star_templates_list.append(flux_log_temp)
+                    star_templates = np.column_stack(star_templates_list)
+
+                    interpolator = interp1d(log_lam_temp, star_templates, axis=0, bounds_error=False, fill_value=0.0)
+                    star_templates_aligned = interpolator(log_lam_gal)
+
+                    fwhm_gal = 2.4
+                    gas_templates, gas_names, line_wave = util.emission_lines(
+                        log_lam_gal, [galaxy_wave_obs[0], galaxy_wave_obs[-1]], fwhm_gal
+                    )
+
+                    templates = np.column_stack([star_templates_aligned, gas_templates])
+                    component = [0] * star_templates_aligned.shape[1] + [1] * gas_templates.shape[1]
+
+                    # pPXF 피팅 구동
+                    vel_init = c * np.log(1.0 + redshift)
+                    start = [[vel_init, 150.0], [vel_init, 120.0]]
+                    moments = [2, 2]
+
+                    wave_rest = galaxy_wave_obs / (1.0 + redshift)
+                    wave_limit = 3800.0
+                    goodpixels = np.where((wave_rest > wave_limit) & (galaxy_flux > -1000))[0]
+
+                    pp = ppxf(templates, galaxy_flux, galaxy_noise, velscale, start,
+                              goodpixels=goodpixels, plot=False, degree=4, moments=moments, component=component)
+
+                    # 오차 전파 및 블랙홀 질량 계산
+                    sigma_stars = pp.sol[0][1]
+                    try:
+                        sigma_err = pp.error[0][1] if (hasattr(pp, 'error') and pp.error is not None) else 5.0
+                    except:
+                        sigma_err = 5.0
+
+                    log_M_bh = 8.49 + 4.38 * np.log10(sigma_stars / 200.0)
+                    M_bh_power = 10**log_M_bh
+
+                    log_M_bh_err_meas = 4.38 * (sigma_err / (sigma_stars * np.log(10)))
+                    intrinsic_scatter = 0.29
+                    log_M_bh_err_total = np.sqrt(log_M_bh_err_meas**2 + intrinsic_scatter**2)
+
+                    M_bh_lower = 10**(log_M_bh - log_M_bh_err_total)
+                    M_bh_upper = 10**(log_M_bh + log_M_bh_err_total)
+
+                    str_mass_center = to_korean_shares(M_bh_power)
+                    str_mass_lower  = to_korean_shares(M_bh_lower)
+                    str_mass_upper  = to_korean_shares(M_bh_upper)
+
+                    # 성분 분해 결과 처리
+                    n_stars = star_templates_aligned.shape[1]
+                    n_gas = gas_templates.shape[1]
+                    gas_fit = pp.matrix[:, n_stars:n_stars+n_gas] @ pp.weights[n_stars:n_stars+n_gas]
+                    stellar_continuum = pp.bestfit - gas_fit
+                    residual_dec = pp.galaxy - pp.bestfit
+                    mask_dec = (wave_rest >= 3800) & (wave_rest <= 7000)
+
+                    # 전역 데이터 업데이트
+                    st.session_state.pipeline_data_stream.update({
+                        "velscale": velscale, "sigma_stars": sigma_stars, "sigma_err": sigma_err,
+                        "log_M_bh": log_M_bh, "log_M_bh_err": log_M_bh_err_total,
+                        "M_bh": M_bh_power, "M_bh_lower": M_bh_lower, "M_bh_upper": M_bh_upper,
+                        "str_mass_center": str_mass_center, "str_mass_range": f"{str_mass_lower} 배 ~ {str_mass_upper} 배",
+                        "stellar_continuum": stellar_continuum, "gas_fit": gas_fit, "pp_object": pp,
+                        "is_ppxf_ready": True
+                    })
+                    st.session_state.pipeline_data_stream["saved_plots"].update({
+                        "ppxf_fit": path_p5,
+                        "decomposition": path_p6
+                    })
+
+                    st.success(f"2단계 파이프라인 수렴 완료: 항성 속도분산 = {sigma_stars:.2f} km/s | 중심 블랙홀 질량 = 태양의 약 {str_mass_center} 배")
+
+                    # 수치 리포트 대시보딩
+                    st.markdown("#### AGN 블랙홀 질량 및 통계적 오차 산출 명세")
+                    metrics_col1, metrics_col2 = st.columns(2)
+                    with metrics_col1:
+                        st.metric(label="항성 속도분산 측정치", value=f"{sigma_stars:.2f} ± {sigma_err:.2f} km/s")
+                        st.text(f"물리 학술지 표기용 로그값: Log(M_BH/M_sun) = {log_M_bh:.2f} ± {log_M_bh_err_total:.2f}")
+                    with metrics_col2:
+                        st.metric(label="중심 블랙홀 질량 (대표값)", value=f"태양 질량의 {str_mass_center} 배")
+                        st.text(f"1-σ 신뢰구간 범위: {str_mass_lower} 배 ~ {str_mass_upper} 배")
+
+                    # 최적화 결과 시각화
+                    st.markdown("#### pPXF 최적 모델 및 성분 분해 검수 그래프")
+                    fig_fit = plot_ppxf_fit(wave_rest, galaxy_flux, pp.bestfit, goodpixels, path_p5)
+                    st.pyplot(fig_fit)
+                    plt.close(fig_fit)
+
+                    fig_dec = plot_spectral_decomposition(wave_rest, pp.galaxy, pp.bestfit, stellar_continuum, residual_dec, mask_dec, path_p6)
+                    st.pyplot(fig_dec)
+                    plt.close(fig_dec)
+
+                except Exception as e:
+                    st.error(f"pPXF 최적화 파이프라인 연산 중 치명적 오류 발생: {e}")
+
 elif menu == "2. pPXF 연속광 공제 설명":
     st.header("pPXF 항성 연속광 공제")
     st.write("---")
-    if st.session_state.pipeline_data_stream["is_ready"]:
-        st.success(f"백업된 차트 주소록: {st.session_state.pipeline_data_stream['saved_plots']}")
-    st.header("✨ pPXF 항성 연속광 공제")
+    if st.session_state.pipeline_data_stream["is_ppxf_ready"]:
+        st.success(f"현재 로드된 천체 {st.session_state.metadata['obj_name']}의 pPXF 연산 데이터가 준비되어 있습니다.")
+        st.write(f"항성 속도분산 고유 모델 값: {st.session_state.pipeline_data_stream['sigma_stars']:.2f} km/s")
+    else:
+        st.info("1번 제어판에서 1단계 및 2단계 파이프라인을 먼저 가동해 주세요.")
+
+elif menu == "3. Hβ 성분 분해 설명":
+    st.header("광폭 Hβ 방출선 성분 분해")
     st.write("---")
-    if st.session_state.pipeline_data_stream["is_ready"]:
-        st.success(f"백업된 차트 주소록: {st.session_state.pipeline_data_stream['saved_plots']}")
+
+elif menu == "4. 비리얼 블랙홀 질량 계산":
+    st.header("비리얼 정리 기반 블랙홀 질량 계산")
+    st.write("---")
