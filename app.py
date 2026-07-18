@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 # ==============================================================================
 st.set_page_config(page_title="AstroFit", page_icon="🌌", layout="wide")
 
-# 코랩의 전역 변수(Global Storage) 역할을 스트림릿의 session_state가 수행합니다.
+# 파일 객체 자체를 메모리에 저장하기 위해 세션 상태를 수정합니다.
 if "metadata" not in st.session_state:
     st.session_state.metadata = {
         "obj_name": "NGC 5548",
@@ -18,8 +18,8 @@ if "metadata" not in st.session_state:
 
 if "config" not in st.session_state:
     st.session_state.config = {
-        "file_path": "/content/spec-1678-53433-0425.fits",
-        "emiles_path": "/content/EMILES_BASTI_BASE_CH_FITS.tar.gz",
+        "fits_file": None,
+        "emiles_file": None,
         "manual_Av": "0.0700",
         "Rv": 3.1
     }
@@ -40,7 +40,6 @@ if menu == "1. 마스터 제어판 (Control Panel)":
     st.subheader("⚙️ Spectrum Analysis Report Master Control Panel")
     
     # [UI COMPONENTS - EXTERNAL LINKS TOOLBAR] 외부 데이터베이스 바로가기 링크 툴바
-    # 기존 HTML 디자인을 st.markdown으로 그대로 자연스럽게 렌더링합니다.
     st.markdown("""
     <div style="margin: 5px 0px 20px 0px; padding: 12px; background-color: #f8f9fa; border-left: 4px solid #1F4E79; border-radius: 4px;">
         <strong style="color: #1F4E79; font-size: 13px; display: block; margin-bottom: 8px; font-family:sans-serif;">
@@ -61,7 +60,7 @@ if menu == "1. 마스터 제어판 (Control Panel)":
     </div>
     """, unsafe_allow_html=True)
 
-    # [UI COMPONENTS - INPUT WIDGETS] 대시보드 폼 요소 생성 (HBox 효과를 위해 columns 분할)
+    # 대시보드 폼 요소 생성 (좌우 분할)
     col1, col2 = st.columns(2)
     
     with col1:
@@ -74,35 +73,44 @@ if menu == "1. 마스터 제어판 (Control Panel)":
         obj_type = st.selectbox("천체 유형:", options=type_options, index=type_options.index(st.session_state.metadata["obj_type"]))
 
     with col2:
-        st.markdown("### [B] 백엔드 파이프라인 실측 연동")
-        file_path = st.text_input("SDSS FITS 경로:", value=st.session_state.config["file_path"])
-        emiles_path = st.text_input("E-MILES 템플릿 경로:", value=st.session_state.config["emiles_path"])
+        st.markdown("### [B] 백엔드 데이터 실측 적용")
+        
+        # 💡 핵심 변경 항목: 경로 입력창을 파일 업로더(st.file_uploader)로 전면 교체!
+        fits_file = st.file_uploader("SDSS FITS 파일 선택 (.fits)", type=["fits", "fits.gz"])
+        emiles_file = st.file_uploader("E-MILES 템플릿 파일 선택 (.tar.gz)", type=["gz", "tar.gz"])
+        
         manual_Av = st.text_input("성간소광량 Av (or None):", value=st.session_state.config["manual_Av"])
         Rv = st.number_input("Rv 상수 (기본 3.1):", value=st.session_state.config["Rv"], format="%.1f")
 
     # 설정 적용 버튼 (동기화 시스템)
-    # 스트림릿은 버튼을 누르는 순간 아래 조건문 블록이 실행됩니다.
     if st.button("🔄 제어판 데이터 시스템 동기화 (Apply)", use_container_width=True):
-        # 메모리 변수 저장
         st.session_state.metadata["obj_name"] = obj_name.strip()
         st.session_state.metadata["ra"] = ra
         st.session_state.metadata["dec"] = dec
         st.session_state.metadata["obj_type"] = obj_type
 
-        st.session_state.config["file_path"] = file_path.strip()
-        st.session_state.config["emiles_path"] = emiles_path.strip()
+        # 💡 업로드된 파일 객체 자체를 세션에 바인딩합니다.
+        st.session_state.config["fits_file"] = fits_file
+        st.session_state.config["emiles_file"] = emiles_file
         st.session_state.config["manual_Av"] = manual_Av.strip()
         st.session_state.config["Rv"] = Rv
 
-        st.success("파라미터 셋이 메모리에 바인딩되었습니다.")
+        if fits_file and emiles_file:
+            st.success("FITS 및 템플릿 파일이 분석 메모리에 성공적으로 로드되었습니다!")
+        else:
+            st.warning("설정은 세이브되었으나, 파일이 아직 업로드되지 않았습니다. 파일을 선택해 주세요.")
         
-    # [OUTPUT BOX] 현재 메모리에 바인딩된 실시간 데이터 요약 출력
+    # [OUTPUT BOX] 현재 파일 업로드 상태 및 메타데이터 실시간 요약 출력
     st.markdown("#### 🖥️ 현재 동기화된 시스템 데이터 상태")
+    
+    # 파일 상태 문자열 처리
+    fits_status = st.session_state.config["fits_file"].name if st.session_state.config["fits_file"] else "❌ 미업로드 (No File)"
+    emiles_status = st.session_state.config["emiles_file"].name if st.session_state.config["emiles_file"] else "❌ 미업로드 (No File)"
     av_display = "None" if st.session_state.config["manual_Av"].upper() == "NONE" else f"{st.session_state.config['manual_Av']} mag"
     
     summary_text = f"""객체: {st.session_state.metadata['obj_name']} | 좌표: ({st.session_state.metadata['ra']}, {st.session_state.metadata['dec']}) | 유형: {st.session_state.metadata['obj_type']}
-FITS: {st.session_state.config['file_path']}
-E-MILES 템플릿: {st.session_state.config['emiles_path']}
+[적용된 FITS 데이터]: {fits_status}
+[적용된 E-MILES 템플릿]: {emiles_status}
 소광 설정치: Av = {av_display} (Rv = {st.session_state.config['Rv']})"""
     
     st.code(summary_text, language="text")
