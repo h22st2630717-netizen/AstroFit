@@ -265,29 +265,29 @@ def plot_spectral_decomposition(wave_rest, original_flux, bestfit, stellar_conti
     return fig
 
 def plot_virial_continuum_fit(x_fit, y_fit, y_model, cont_y, broad_hb_y, narrow_hb_y, o3_complex_y, residual_hb, save_path):
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6.5), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+    fig, (ax2, ax2_res) = plt.subplots(2, 1, figsize=(12, 6.5), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
 
-    ax1.plot(x_fit, y_fit, color='black', lw=0.8, label='Observed Spectrum')
-    ax1.plot(x_fit, y_model, color='firebrick', lw=1.2, label='Total Virial Model Fit')
-    ax1.plot(x_fit, cont_y, color='gray', linestyle=':', lw=1.0, label='AGN Continuum Base')
-    ax1.plot(x_fit, broad_hb_y, color='royalblue', lw=1.5, label=r'Isolated Broad ${\rm H}\beta$ Component (BLR)')
-    ax1.plot(x_fit, narrow_hb_y, color='limegreen', lw=0.8, label=r'Narrow ${\rm H}\beta$ (NLR)')
-    ax1.plot(x_fit, o3_complex_y, color='darkorange', lw=0.8, label='[OIII] Duplet')
+    ax2.plot(x_fit, y_fit, color='black', lw=0.8, label='Observed Spectrum')
+    ax2.plot(x_fit, y_model, color='firebrick', lw=1.2, label='Total Virial Model Fit')
+    ax2.plot(x_fit, cont_y, color='gray', linestyle=':', lw=1.0, label='AGN Continuum Base')
+    ax2.plot(x_fit, broad_hb_y, color='royalblue', lw=1.5, label=r'Isolated Broad ${\rm H}\beta$ Component (BLR)')
+    ax2.plot(x_fit, narrow_hb_y, color='limegreen', lw=0.8, label=r'Narrow ${\rm H}\beta$ (NLR)')
+    ax2.plot(x_fit, o3_complex_y, color='darkorange', lw=0.8, label='[OIII] Duplet')
 
-    ax1.set_xlim(4700, 5150)
-    ax1.set_ylabel(r"Flux ($10^{-17}$ erg s$^{-1}$ cm$^{-2}$ Å$^{-1}$)", fontsize=11)
-    ax1.set_title("Method 2: AGN Broad-Line Virial Profile Decomposition & Continuum Scaling", fontsize=13, fontweight='bold', pad=12)
-    ax1.tick_params(direction='in', top=True, right=True)
-    ax1.legend(frameon=False, fontsize=10, loc='upper left')
-    ax1.grid(True, alpha=0.15, linestyle=':')
-
-    ax2.plot(x_fit, residual_hb, color='gray', lw=0.8, label='Residuals')
-    ax2.axhline(0, color='black', linestyle=':', alpha=0.6, lw=0.8)
-    ax2.set_xlabel("Rest wavelength (Å)", fontsize=11)
-    ax2.set_ylabel('Residual', fontsize=11)
+    ax2.set_xlim(4700, 5150)
+    ax2.set_ylabel(r"Flux ($10^{-17}$ erg s$^{-1}$ cm$^{-2}$ Å$^{-1}$)", fontsize=11)
+    ax2.set_title("Method 2: AGN Broad-Line Virial Profile Decomposition & Continuum Scaling", fontsize=13, fontweight='bold', pad=12)
     ax2.tick_params(direction='in', top=True, right=True)
-    ax2.legend(frameon=False, fontsize=10, loc='upper right')
+    ax2.legend(frameon=False, fontsize=10, loc='upper left')
     ax2.grid(True, alpha=0.15, linestyle=':')
+
+    ax2_res.plot(x_fit, residual_hb, color='gray', lw=0.8, label='Residuals')
+    ax2_res.axhline(0, color='black', linestyle=':', alpha=0.6, lw=0.8)
+    ax2_res.set_xlabel("Rest wavelength (Å)", fontsize=11)
+    ax2_res.set_ylabel('Residual', fontsize=11)
+    ax2_res.tick_params(direction='in', top=True, right=True)
+    ax2_res.legend(frameon=False, fontsize=10, loc='upper right')
+    ax2_res.grid(True, alpha=0.15, linestyle=':')
 
     plt.tight_layout()
     fig.subplots_adjust(hspace=0.05)
@@ -310,7 +310,9 @@ def plot_m_sigma_relation(sigma_star, log_M_BH, sigma_star_err, log_M_BH_total_e
 
     ax.set_xlabel(r"Stellar Velocity Dispersion $\sigma_*$ (km/s)", fontsize=11)
     ax.set_ylabel(r"$\log_{10}(M_{\rm BH} / M_\odot)$", fontsize=11)
-    ax.set_title("Method 3: Bulge Stellar Dynamic Entropy Scaling ($M_{\bullet} - \sigma_*$ Relation)", fontsize=12, fontweight='bold', pad=12)
+    
+    # [수정 완료] r 접두사를 추가하여 \bullet 이스케이프 파싱 문제를 완벽하게 해결했습니다.
+    ax.set_title(r"Method 3: Bulge Stellar Dynamic Entropy Scaling ($M_{\bullet} - \sigma_*$ Relation)", fontsize=12, fontweight='bold', pad=12)
 
     ax.set_xlim(60, 380)
     ax.set_ylim(5.5, 10.5)
