@@ -5,6 +5,8 @@ import shutil
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
+from scipy.optimize import curve_fit
+from astropy.cosmology import FlatLambdaCDM
 from glob import glob
 from astropy.io import fits
 import astropy.units as u
@@ -37,14 +39,17 @@ if "pipeline_data_stream" not in st.session_state:
         "wave_obs": None, "flux_obs": None, "sigma_obs": None,
         "wave_rest": None, "flux_dereddened": None, "sigma_dereddened": None,
         "z_calculated": None, "final_Av": None,
+        "plate": "N/A", "mjd": "N/A", "fiber": "N/A",
         "velscale": None, "sigma_stars": None, "sigma_err": None,
         "log_M_bh": None, "log_M_bh_err": None, "M_bh": None,
         "M_bh_lower": None, "M_bh_upper": None,
         "str_mass_center": None, "str_mass_range": None,
         "stellar_continuum": None, "gas_fit": None, "pp_object": None,
+        "method3_data": {"has_run": False},
         "saved_plots": {},   # 리포트 생성 엔진용 이미지 주소록
         "is_ready": False,
-        "is_ppxf_ready": False
+        "is_ppxf_ready": False,
+        "is_virial_ready": False
     }
 
 OBS_WAVE_RANGE  = (4300, 9500)
@@ -52,10 +57,12 @@ REST_WAVE_RANGE = (4000, 9000)
 ZOOM_WAVE_RANGE = (6400, 6600)
 
 # ==============================================================================
-# [HUMAN-READABLE UTILITY] 태양질량 직관적 단위 변환 함수
+# [HUMAN-READABLE UTILITY] NaN 및 무한대 대응 예외 처리 내장 변환 함수
 # ==============================================================================
 def to_korean_shares(value):
     """숫자를 'X억 X,XXX만' 형태의 직관적인 한국어 배수로 변환합니다."""
+    if value is None or not np.isfinite(value) or value <= 0:
+        return "측정 불가(피팅 오류)"
     if value >= 1e8:
         eok = int(value // 1e8)
         man = int((value % 1e8) // 1e4)
@@ -79,6 +86,7 @@ def setup_templates(uploaded_tar, extract_path="./temp_emiles"):
 
 def load_and_process_spectrum(uploaded_fits, manual_Av_str, Rv=3.1):
     if uploaded_fits is None: raise FileNotFoundError("SDSS FITS 파일이 없습니다.")
+    uploaded_fits.seek(0)
     with fits.open(uploaded_fits) as hdul:
         coadd = hdul[1].data
         specobj = hdul[2].data
@@ -90,6 +98,11 @@ def load_and_process_spectrum(uploaded_fits, manual_Av_str, Rv=3.1):
         sigma_obs = np.zeros_like(flux_obs)
         good_pixels = ivar > 0
         sigma_obs[good_pixels] = 1.0 / np.sqrt(ivar[good_pixels])
+
+        # 관측 메타데이터 미리 추출
+        plate_val = header.get('PLATEID', header.get('PLATE', 'N/A'))
+        mjd_val = header.get('MJD', 'N/A')
+        fiber_val = header.get('FIBERID', header.get('FIBER', 'N/A'))
 
         try:
             if manual_Av_str.upper() != 'NONE' and manual_Av_str.strip() != '':
@@ -108,7 +121,19 @@ def load_and_process_spectrum(uploaded_fits, manual_Av_str, Rv=3.1):
         flux_dereddened = flux_obs / transmission
         sigma_dereddened = sigma_obs / transmission
         wave_rest = wave_obs / (1 + z)
-        return wave_obs, flux_obs, sigma_obs, wave_rest, flux_dereddened, sigma_dereddened, z, Av
+        return wave_obs, flux_obs, sigma_obs, wave_rest, flux_dereddened, sigma_dereddened, z, Av, plate_val, mjd_val, fiber_val
+
+# ==============================================================================
+# Hβ + [OIII] 컴플렉스 다중 성분 피팅 모델 함수
+# ==============================================================================
+def agn_hb_profile_model(x, c0, c1, f_b, m_b, s_b, f_n, m_n, s_n, f_o3, m_o3, s_o3):
+    continuum = c0 + c1 * (x - 4900.0)
+    gauss_hb_broad  = f_b * np.exp(-0.5 * ((x - m_b) / s_b)**2)
+    gauss_hb_narrow = f_n * np.exp(-0.5 * ((x - m_n) / s_n)**2)
+    gauss_o3_5007 = f_o3 * np.exp(-0.5 * ((x - m_o3) / s_o3)**2)
+    m_o3_4959     = m_o3 - 47.93
+    gauss_o3_4959 = (f_o3 / 2.98) * np.exp(-0.5 * ((x - m_o3_4959) / s_o3)**2)
+    return continuum + gauss_hb_broad + gauss_hb_narrow + gauss_o3_5007 + gauss_o3_4959
 
 # ==============================================================================
 # [VISUALIZATION PLOTS] 차트 생성 및 디스크 자동 저장 컴포넌트
@@ -237,6 +262,36 @@ def plot_spectral_decomposition(wave_rest, original_flux, bestfit, stellar_conti
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     return fig
 
+def plot_virial_continuum_fit(x_fit, y_fit, y_model, cont_y, broad_hb_y, narrow_hb_y, o3_complex_y, residual_hb, save_path):
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6.5), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+
+    ax1.plot(x_fit, y_fit, color='black', lw=0.8, label='Observed Spectrum')
+    ax1.plot(x_fit, y_model, color='firebrick', lw=1.2, label='Total Virial Model Fit')
+    ax1.plot(x_fit, cont_y, color='gray', linestyle=':', lw=1.0, label='AGN Continuum Base')
+    ax1.plot(x_fit, broad_hb_y, color='royalblue', lw=1.5, label=r'Isolated Broad ${\rm H}\beta$ Component (BLR)')
+    ax1.plot(x_fit, narrow_hb_y, color='limegreen', lw=0.8, label=r'Narrow ${\rm H}\beta$ (NLR)')
+    ax1.plot(x_fit, o3_complex_y, color='darkorange', lw=0.8, label='[OIII] Duplet')
+
+    ax1.set_xlim(4700, 5150)
+    ax1.set_ylabel(r"Flux ($10^{-17}$ erg s$^{-1}$ cm$^{-2}$ Å$^{-1}$)", fontsize=11)
+    ax1.set_title("Method 2: AGN Broad-Line Virial Profile Decomposition & Continuum Scaling", fontsize=13, fontweight='bold', pad=12)
+    ax1.tick_params(direction='in', top=True, right=True)
+    ax1.legend(frameon=False, fontsize=10, loc='upper left')
+    ax1.grid(True, alpha=0.15, linestyle=':')
+
+    ax2.plot(x_fit, residual_hb, color='gray', lw=0.8, label='Residuals')
+    ax2.axhline(0, color='black', linestyle=':', alpha=0.6, lw=0.8)
+    ax2.set_xlabel("Rest wavelength (Å)", fontsize=11)
+    ax2.set_ylabel('Residual', fontsize=11)
+    ax2.tick_params(direction='in', top=True, right=True)
+    ax2.legend(frameon=False, fontsize=10, loc='upper right')
+    ax2.grid(True, alpha=0.15, linestyle=':')
+
+    plt.tight_layout()
+    fig.subplots_adjust(hspace=0.05)
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    return fig
+
 # ==============================================================================
 # [MENU NAVIGATION & UI CONTROL PANEL]
 # ==============================================================================
@@ -288,7 +343,7 @@ if menu == "1. 마스터 제어판 (Control Panel)":
             with st.spinner("1단계 전처리 및 성간 소광 자동 연산 수행 중..."):
                 try:
                     templates_list = setup_templates(st.session_state.config["emiles_file"])
-                    w_obs, f_obs, s_obs, w_rest, f_corr, s_corr, calc_z, final_av = load_and_process_spectrum(
+                    w_obs, f_obs, s_obs, w_rest, f_corr, s_corr, calc_z, final_av, p_v, m_v, f_v = load_and_process_spectrum(
                         st.session_state.config["fits_file"], st.session_state.config["manual_Av"], st.session_state.config["Rv"]
                     )
                     
@@ -301,6 +356,7 @@ if menu == "1. 마스터 제어판 (Control Panel)":
                         "templates": templates_list, "wave_obs": w_obs, "flux_obs": f_obs, "sigma_obs": s_obs,
                         "wave_rest": w_rest, "flux_dereddened": f_corr, "sigma_dereddened": s_corr,
                         "z_calculated": calc_z, "final_Av": final_av,
+                        "plate": p_v, "mjd": m_v, "fiber": f_v,
                         "saved_plots": {
                             "observed_frame": path_p1,
                             "rest_frame": path_p2,
@@ -456,6 +512,143 @@ if menu == "1. 마스터 제어판 (Control Panel)":
                 except Exception as e:
                     st.error(f"pPXF 최적화 파이프라인 연산 중 치명적 오류 발생: {e}")
 
+    # ==============================================================================
+    # 3단계: 광폭 방출선 성분 분해 및 단일 에포크 비리얼 블랙홀 질량 산출 파이프라인
+    # ==============================================================================
+    st.write("---")
+    st.markdown("### 3단계: 광폭 방출선 성분 분해 및 단일 에포크 비리얼(Virial) 블랙홀 질량 산출 파이프라인 가동")
+
+    if st.button("비리얼 질량 계산 및 가스 방출선 성분 분해 가동", type="primary", use_container_width=True):
+        if not st.session_state.pipeline_data_stream.get("is_ready", False):
+            st.error("실행 실패: 1단계 데이터 보정 파이프라인이 아직 가동되지 않았습니다. 상단의 1단계 버튼을 먼저 실행해주세요.")
+        else:
+            with st.spinner("기저 연속광 및 다중 성분 가우시안 동시 최적화 연산 가동 중..."):
+                try:
+                    stream = st.session_state.pipeline_data_stream
+                    galaxy_wave = stream["wave_obs"]
+                    galaxy_flux = stream["flux_dereddened"]
+                    galaxy_noise = stream["sigma_dereddened"]
+                    redshift = stream["z_calculated"]
+                    plate_val = stream["plate"]
+                    mjd_val = stream["mjd"]
+                    fiber_val = stream["fiber"]
+
+                    path_p7 = os.path.join(IMAGE_DIR, "07_virial_continuum_fit.png")
+
+                    # Hβ-OIII 복합 대역 데이터 크롭 (4700 ~ 5150 Å)
+                    wave_rest = galaxy_wave / (1 + redshift)
+                    mask_hb = (wave_rest >= 4700.0) & (wave_rest <= 5150.0)
+                    x_fit = wave_rest[mask_hb]
+                    y_fit = galaxy_flux[mask_hb]
+                    fit_err = galaxy_noise[mask_hb]
+
+                    if len(x_fit) < 50:
+                        st.error("데이터 부족: 지정된 파장 대역에 피팅할 데이터 포인트가 부족합니다.")
+                    else:
+                        c0_init = np.median(y_fit)
+                        p0_guess = [c0_init, 0.0, c0_init*2, 4861.33, 25.0, c0_init, 4861.33, 3.0, c0_init*4, 5007.0, 3.0]
+                        bounds_low = [-np.inf, -np.inf, 0.0, 4820.0, 6.0, 0.0, 4850.0, 0.5, 0.0, 4990.0, 0.5]
+                        bounds_high = [np.inf, np.inf, np.inf, 4900.0, 100.0, np.inf, 4875.0, 6.0, np.inf, 5025.0, 6.0]
+
+                        popt, pcov = curve_fit(
+                            agn_hb_profile_model, x_fit, y_fit, p0=p0_guess,
+                            bounds=(bounds_low, bounds_high), sigma=fit_err, absolute_sigma=True, maxfev=10000
+                        )
+                        perr = np.sqrt(np.diag(pcov))
+
+                        c0, c1, f_b, m_b, s_b, f_n, m_n, s_n, f_o3, m_o3, s_o3 = popt
+
+                        c_speed = 299792.458
+                        fwhm_angstrom = 2.35482 * s_b
+                        fwhm_kms = (fwhm_angstrom / m_b) * c_speed
+                        fwhm_kms_err = fwhm_kms * (perr[4] / max(0.1, s_b))
+
+                        cosmo = FlatLambdaCDM(H0=70, Om0=0.3)
+                        dl_mpc = cosmo.luminosity_distance(redshift).value
+                        dl_cm = dl_mpc * 3.08567758e24
+
+                        flux_density_5100 = c0 + c1 * (5100.0 - 4900.0)
+                        flux_5100_cgs = flux_density_5100 * 1e-17
+
+                        L_5100 = 5100.0 * (4.0 * np.pi * dl_cm**2) * flux_5100_cgs * (1.0 + redshift)
+                        L_5100_err = L_5100 * (perr[0] / max(0.1, c0))
+
+                        if L_5100 > 0 and fwhm_kms > 0:
+                            log_M_virial = 0.91 + 0.50 * np.log10(L_5100 / 1e44) + 2.0 * np.log10(fwhm_kms)
+                            M_virial = 10**log_M_virial
+
+                            log_lum_err = (1.0 / np.log(10)) * (L_5100_err / L_5100)
+                            log_fwhm_err = (1.0 / np.log(10)) * (fwhm_kms_err / fwhm_kms)
+
+                            intrinsic_scatter = 0.43
+                            log_M_virial_stat_err = np.sqrt((0.50 * log_lum_err)**2 + (2.0 * log_fwhm_err)**2)
+                            log_M_virial_total_err = np.sqrt(log_M_virial_stat_err**2 + intrinsic_scatter**2)
+
+                            M_virial_err = M_virial * np.log(10) * log_M_virial_total_err
+                            M_upper = 10**(log_M_virial + log_M_virial_total_err)
+                            M_lower = 10**(log_M_virial - log_M_virial_total_err)
+
+                            delta_plus = M_upper - M_virial
+                            delta_minus = M_virial - M_lower
+                        else:
+                            log_M_virial, log_M_virial_stat_err, log_M_virial_total_err = np.nan, np.nan, np.nan
+                            M_virial, M_virial_err, M_lower, M_upper = np.nan, np.nan, np.nan, np.nan
+                            delta_plus, delta_minus = np.nan, np.nan
+
+                        str_mass_center = to_korean_shares(M_virial)
+                        str_mass_lower  = to_korean_shares(M_lower)
+                        str_mass_upper  = to_korean_shares(M_upper)
+
+                        # 모델 시각화 데이터 분해 계산
+                        y_model = agn_hb_profile_model(x_fit, *popt)
+                        cont_y = c0 + c1 * (x_fit - 4900.0)
+                        broad_hb_y = f_b * np.exp(-0.5 * ((x_fit - m_b) / s_b)**2) + cont_y
+                        narrow_hb_y = f_n * np.exp(-0.5 * ((x_fit - m_n) / s_n)**2)
+                        o3_complex_y = (f_o3 * np.exp(-0.5 * ((x_fit - m_o3) / s_o3)**2) +
+                                        (f_o3 / 2.98) * np.exp(-0.5 * ((x_fit - (m_o3 - 47.93)) / s_o3)**2))
+                        residual_hb = y_fit - y_model
+
+                        # 데이터 바인딩
+                        st.session_state.pipeline_data_stream["method3_data"] = {
+                            "plate": plate_val, "mjd": mjd_val, "fiber": fiber_val,
+                            "fwhm_kms": fwhm_kms, "fwhm_kms_err": fwhm_kms_err,
+                            "L_5100": L_5100, "L_5100_err": L_5100_err,
+                            "log_M_bh": log_M_virial,
+                            "log_M_bh_stat_err": log_M_virial_stat_err,
+                            "log_M_bh_total_err": log_M_virial_total_err,
+                            "M_bh": M_virial, "M_bh_err": M_virial_err,
+                            "delta_plus": delta_plus, "delta_minus": delta_minus,
+                            "str_mass_center": str_mass_center,
+                            "str_mass_range": f"{str_mass_lower} 배 ~ {str_mass_upper} 배",
+                            "plot_path": path_p7,
+                            "has_run": True
+                        }
+                        st.session_state.pipeline_data_stream["is_virial_ready"] = True
+                        st.session_state.pipeline_data_stream["saved_plots"].update({"virial_fit": path_p7})
+
+                        st.success(f"3단계 비리얼 파이프라인 분석 완료: 중심 블랙홀 질량 = 태양의 약 {str_mass_center} 배")
+
+                        # 명세 리포트 출력
+                        st.markdown("#### 단일 에포크 비리얼 물리 파라미터 측정 명세")
+                        st.text(f"SDSS 대상 관측 정보 (Plate / MJD / Fiber): {plate_val} / {mjd_val} / {fiber_val}")
+                        
+                        m3_col1, m3_col2 = st.columns(2)
+                        with m3_col1:
+                            st.metric(label="광폭 Hbeta 선폭 (FWHM)", value=f"{fwhm_kms:.2f} ± {fwhm_kms_err:.2f} km/s")
+                            st.metric(label="5100 Å 단색 대역 광도 (L_5100)", value=f"{L_5100/1e44:.3f} x 10^44 erg/s")
+                        with m3_col2:
+                            st.metric(label="비리얼 블랙홀 질량 (대표값)", value=f"태양 질량의 {str_mass_center} 배")
+                            st.text(f"계통 오차 반영 로그값: Log(M_BH/M_sun) = {log_M_virial:.3f} ± {log_M_virial_total_err:.3f}")
+
+                        # 시각화 검수 차트 출력
+                        st.markdown("#### 광폭 방출선 비리얼 프로파일 성분 분해 검수 그래프")
+                        fig_virial = plot_virial_continuum_fit(x_fit, y_fit, y_model, cont_y, broad_hb_y, narrow_hb_y, o3_complex_y, residual_hb, path_p7)
+                        st.pyplot(fig_virial)
+                        plt.close(fig_virial)
+
+                except Exception as e:
+                    st.error(f"비리얼 프로파일 최적화 파이프라인 가동 중 오류 발생: {e}")
+
 elif menu == "2. pPXF 연속광 공제 설명":
     st.header("pPXF 항성 연속광 공제")
     st.write("---")
@@ -468,6 +661,13 @@ elif menu == "2. pPXF 연속광 공제 설명":
 elif menu == "3. Hβ 성분 분해 설명":
     st.header("광폭 Hβ 방출선 성분 분해")
     st.write("---")
+    if st.session_state.pipeline_data_stream["is_virial_ready"]:
+        m3_res = st.session_state.pipeline_data_stream["method3_data"]
+        st.success(f"현재 로드된 천체 {st.session_state.metadata['obj_name']}의 비리얼 컴플렉스 성분 분해 연산이 완료된 상태입니다.")
+        st.write(f"추출된 광폭 Hβ 선폭 (FWHM): {m3_res['fwhm_kms']:.2f} km/s")
+        st.write(f"산출된 단색 광도 L_5100: {m3_res['L_5100']:.3e} erg/s")
+    else:
+        st.info("1번 제어판에서 3단계 파이프라인을 가동하여 피팅 분석을 완료해 주세요.")
 
 elif menu == "4. 비리얼 블랙홀 질량 계산":
     st.header("비리얼 정리 기반 블랙홀 질량 계산")
