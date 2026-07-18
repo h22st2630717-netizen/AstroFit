@@ -335,7 +335,7 @@ def plot_m_sigma_relation(sigma_star, log_M_BH, sigma_star_err, log_M_BH_total_e
     return fig
 
 # ==============================================================================
-# [PDF REPORT BUILD ENGINE] 서버 물리 디스크 프리 인메모리 바이너리 생성기
+# [PDF REPORT BUILD ENGINE] 서버 물리 디스크 프리 인메모리 바이너리 생성기 (수정 완료)
 # ==============================================================================
 def create_pdf_report_bytes():
     """세션 상태의 물리 데이터를 취합하여 PDF 바이너리 스트림을 생성합니다."""
@@ -423,23 +423,22 @@ def create_pdf_report_bytes():
         
     story.append(Paragraph("6. 초거대 블랙홀(SMBH) 최종 계산 결과 물리량 비교 명세", h1_s))
     
+    # 사전 포맷팅 및 None 결측치 방어 코드 구축 Zone
     v_fwhm = f"{stream['fwhm_kms']:.2f}" if stream['fwhm_kms'] else "N/A"
     v_fwhm_err = f"{stream['fwhm_kms_err']:.2f}" if stream['fwhm_kms_err'] else "N/A"
     v_lum = f"{stream['lum_broad']:.3e}" if stream['lum_broad'] else "N/A"
     v_mass = f"{stream['M_virial']:.3e}" if stream['M_virial'] else "N/A"
     s_disp = f"{stream['sigma_stars']:.2f}" if stream['sigma_stars'] else "N/A"
+    s_disp_err = f"{stream['sigma_err']:.2f}" if stream['sigma_err'] else "0.00"
     s_mass = f"{stream['M_bh']:.3e}" if stream['M_bh'] else "N/A"
     
-    # ==============================================================================
-    # [문법 오류 해결존] f-string 내부 백슬래시 에러 완전 제어 및 HTML 표기 적용
-    # ==============================================================================
     result_table_data = [
         [Paragraph("분석 모델 방법론", cell_center_b), Paragraph("핵심 측정 인자", cell_center_b), Paragraph("산출된 블랙홀 질량 (M<sub><sub>⊙</sub></sub>)", cell_center_b)],
         [Paragraph("<b>Method 2: Single-Epoch Virial Relation</b><br/>(Hβ Broad-Line Profile)", body_s),
          Paragraph(f"FWHM: {v_fwhm} ± {v_fwhm_err} km/s<br/>L(Hβ): {v_lum} erg/s", body_s),
          Paragraph(f"{v_mass} M<sub><sub>⊙</sub></sub><br/>(태양의 {stream.get('str_mass_center','N/A')}배 수준)", body_s)],
         [Paragraph("<b>Method 3: Bulge Dynamic Scaling</b><br/>(M<sub>BH</sub> - σ<sub>*</sub> Relation)", body_s),
-         Paragraph(f"Stellar Dispersion (σ<sub>*</sub>):<br/>{s_disp} ± {stream.get('sigma_err',0):.2f} km/s", body_s),
+         Paragraph(f"Stellar Dispersion (σ<sub>*</sub>):<br/>{s_disp} ± {s_disp_err} km/s", body_s),
          Paragraph(f"{s_mass} M<sub><sub>⊙</sub></sub>", body_s)]
     ]
     
