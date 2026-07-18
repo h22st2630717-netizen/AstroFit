@@ -819,10 +819,6 @@ elif menu == "5. M-Sigma 관계식 설명":
 try:
     import reportlab
 except ImportError:
-    print("ReportLab 패키지가 없습니다. 설치를 시작합니다...")
-    !pip install -q reportlab
-    print("설치 완료!")
-
 import os
 import urllib.request
 import numpy as np
