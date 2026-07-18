@@ -1,7 +1,3 @@
-
-from analyzer import SpectrumAnalyzer
-analyzer_engine = SpectrumAnalyzer()
-
 import streamlit as st
 import os
 import tarfile
@@ -662,15 +658,6 @@ if menu == "1. 마스터 제어판 (Control Panel)":
                         st.session_state.pipeline_data_stream["is_virial_ready"] = True
                         st.session_state.pipeline_data_stream["saved_plots"].update({"virial_fit": path_p7})
 
-                        # 🔗 [원격 연동] 연산 성공 즉시 analyzer.py를 백엔드에서 호출해 PDF 파일 미리 빌드
-                        obj_name = st.session_state.get("metadata", {}).get("obj_name", "Z 221-50")
-                        obj_class = st.session_state.get("metadata", {}).get("obj_class", "Seyfert Galaxy")
-                        analyzer_engine.generate_report(
-                            target_name=obj_name, obj_class=obj_class,
-                            ra_val=229.525, dec_val=42.745, selected_mode=2,
-                            filename="Virial_Mass_Analysis_Report.pdf"
-                        )
-
                         st.success(f"3단계 비리얼 파이프라인 분석 완료: 중심 블랙홀 질량 = 태양의 약 {str_mass_center} 배")
 
                         # 명세 리포트 출력
@@ -693,18 +680,6 @@ if menu == "1. 마스터 제어판 (Control Panel)":
 
                 except Exception as e:
                     st.error(f"비리얼 프로파일 최적화 파이프라인 가동 중 오류 발생: {e}")
-
-    # 🔥 [추가] 3단계 연산이 완료된 상태라면 화면 이탈 없이 고정 다운로드 버튼 노출
-    if st.session_state.pipeline_data_stream.get("is_virial_ready", False):
-        if os.path.exists("Virial_Mass_Analysis_Report.pdf"):
-            with open("Virial_Mass_Analysis_Report.pdf", "rb") as f:
-                st.download_button(
-                    label="📥 3단계 비리얼 블랙홀 질량 산출 학술 PDF 리포트 다운로드",
-                    data=f,
-                    file_name=f"{st.session_state.get('metadata', {}).get('obj_name', 'Spectrum')}_Virial_Report.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
 
     # ==============================================================================
     # 4단계: 항성 속도 분산(σ*) 및 M-Sigma 관계식 기반 블랙홀 질량 산출 파이프라인
@@ -775,15 +750,6 @@ if menu == "1. 마스터 제어판 (Control Panel)":
                     st.session_state.pipeline_data_stream["is_msigma_ready"] = True
                     st.session_state.pipeline_data_stream["saved_plots"].update({"m_sigma_fit": path_p8})
 
-                    # 🔗 [원격 연동] 4단계 연산 성공 즉시 analyzer.py를 백엔드에서 호출해 PDF 파일 미리 빌드
-                    obj_name = st.session_state.get("metadata", {}).get("obj_name", "Z 221-50")
-                    obj_class = st.session_state.get("metadata", {}).get("obj_class", "Seyfert Galaxy")
-                    analyzer_engine.generate_report(
-                        target_name=obj_name, obj_class=obj_class,
-                        ra_val=229.525, dec_val=42.745, selected_mode=0, # mode 0 (pPXF연동)
-                        filename="MSigma_Analysis_Report.pdf"
-                    )
-
                     st.success(f"4단계 파이프라인 분석 완료: 중심 블랙홀 질량 = 태양의 약 {str_mass_center} 배")
 
                     st.markdown("#### M-Sigma 관계식 물리 파라미터 측정 명세")
@@ -808,14 +774,43 @@ if menu == "1. 마스터 제어판 (Control Panel)":
                 except Exception as e:
                     st.error(f"M-Sigma 최적화 파이프라인 가동 중 오류 발생: {e}")
 
-    # 🔥 [추가] 4단계 연산이 완료된 상태라면 다운로드 버튼 고정 노출
-    if st.session_state.pipeline_data_stream.get("is_msigma_ready", False):
-        if os.path.exists("MSigma_Analysis_Report.pdf"):
-            with open("MSigma_Analysis_Report.pdf", "rb") as f:
-                st.download_button(
-                    label="📥 4단계 M-Sigma 관계식 산출 학술 PDF 리포트 다운로드",
-                    data=f,
-                    file_name=f"{st.session_state.get('metadata', {}).get('obj_name', 'Spectrum')}_MSigma_Report.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
+elif menu == "2. pPXF 연속광 공제 설명":
+    st.header("pPXF 항성 연속광 공제")
+    st.write("---")
+    if st.session_state.pipeline_data_stream["is_ppxf_ready"]:
+        st.success(f"현재 로드된 천체 {st.session_state.metadata['obj_name']}의 pPXF 연산 데이터가 준비되어 있습니다.")
+        st.write(f"항성 속도분산 고유 모델 값: {st.session_state.pipeline_data_stream['sigma_stars']:.2f} km/s")
+    else:
+        st.info("1번 제어판에서 1단계 및 2단계 파이프라인을 먼저 가동해 주세요.")
+
+elif menu == "3. Hβ 성분 분해 설명":
+    st.header("광폭 Hβ 방출선 성분 분해")
+    st.write("---")
+    if st.session_state.pipeline_data_stream["is_virial_ready"]:
+        m3_res = st.session_state.pipeline_data_stream["method3_data"]
+        st.success(f"현재 로드된 천체 {st.session_state.metadata['obj_name']}의 비리얼 컴플렉스 성분 분해 연산이 완료된 상태입니다.")
+        st.write(f"추출된 광폭 Hβ 선폭 (FWHM): {m3_res['fwhm_kms']:.2f} km/s")
+        st.write(f"산출된 단색 광도 L_5100: {m3_res['L_5100']:.3e} erg/s")
+    else:
+        st.info("1번 제어판에서 3단계 파이프라인을 가동하여 피팅 분석을 완료해 주세요.")
+
+elif menu == "4. 비리얼 블랙홀 질량 계산":
+    st.header("비리얼 정리 기반 블랙홀 질량 계산")
+    st.write("---")
+    if st.session_state.pipeline_data_stream["is_virial_ready"]:
+        m3_res = st.session_state.pipeline_data_stream["method3_data"]
+        st.success(f"현재 로드된 천체 {st.session_state.metadata['obj_name']}의 비리얼 관계식 산출 연산이 완료된 상태입니다.")
+        st.write(f"비리얼 블랙홀 질량 대표값: 태양 질량의 {m3_res['str_mass_center']} 배")
+    else:
+        st.info("1번 제어판에서 3단계 파이프라인을 가동하여 피팅 분석을 완료해 주세요.")
+
+elif menu == "5. M-Sigma 관계식 설명":
+    st.header("M-Sigma 관계식 기반 블랙홀 질량 계산")
+    st.write("---")
+    if st.session_state.pipeline_data_stream["is_msigma_ready"]:
+        m4_res = st.session_state.pipeline_data_stream["method4_data"]
+        st.success(f"현재 로드된 천체 {st.session_state.metadata['obj_name']}의 M-Sigma 관계식 산출 연산이 완료된 상태입니다.")
+        st.write(f"추출된 항성 속도 분산 (sigma_*): {m4_res['sigma_star']:.2f} km/s")
+        st.write(f"최종 블랙홀 질량 로그값: {m4_res['log_M_bh']:.3f} dex")
+    else:
+        st.info("1번 제어판에서 4단계 파이프라인을 가동하여 피팅 분석을 완료해 주세요.")
