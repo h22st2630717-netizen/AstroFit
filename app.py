@@ -14,7 +14,7 @@ from astroquery.irsa_dust import IrsaDust
 # ==============================================================================
 # [페이지 초기 설정 및 세션 상태(메모리) 초기화]
 # ==============================================================================
-st.set_page_config(page_title="AstroFit", page_icon="🌌", layout="wide")
+st.set_page_config(page_title="AstroFit", layout="wide")
 
 # 리포트용 그래픽 자산 저장 경로 설정 (스트림릿 가상 서버 내부 디스크)
 IMAGE_DIR = "./report_assets"
@@ -32,7 +32,7 @@ if "pipeline_data_stream" not in st.session_state:
         "wave_obs": None, "flux_obs": None, "sigma_obs": None,
         "wave_rest": None, "flux_dereddened": None, "sigma_dereddened": None,
         "z_calculated": None, "final_Av": None,
-        "saved_plots": {},   # 🔥 리포트 생성 엔진이 참조할 이미지 주소록 백업용
+        "saved_plots": {},   # 리포트 생성 엔진이 참조할 이미지 주소록 백업용
         "is_ready": False
     }
 
@@ -85,7 +85,7 @@ def load_and_process_spectrum(uploaded_fits, manual_Av_str, Rv=3.1):
         return wave_obs, flux_obs, sigma_obs, wave_rest, flux_dereddened, sigma_dereddened, z, Av
 
 # ==============================================================================
-# [VISUALIZATION PLOTS] 렌더링 후 디스크 자동 저장 기능 복구 
+# [VISUALIZATION PLOTS] 렌더링 후 디스크 자동 저장 기능
 # ==============================================================================
 def plot_observed_frame(wave_obs, flux_obs, sigma_obs, wave_range, save_path, step=10):
     mask = (wave_obs >= wave_range[0]) & (wave_obs <= wave_range[1])
@@ -101,7 +101,6 @@ def plot_observed_frame(wave_obs, flux_obs, sigma_obs, wave_range, save_path, st
     ax.legend(frameon=False)
     plt.tight_layout()
     
-    # 💾 기존 코랩 고해상도 이미지 파일 저장 로직 부활
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     return fig
 
@@ -160,11 +159,23 @@ def plot_emission_lines_zoom(wave_rest, flux_corr, wave_range, save_path):
 # ==============================================================================
 # [MENU NAVIGATION & UI CONTROL PANEL]
 # ==============================================================================
-st.sidebar.title("🌌 AstroFit 시스템")
+st.sidebar.title("AstroFit 시스템")
 menu = st.sidebar.radio("이동할 페이지를 선택하세요:", ["1. 마스터 제어판 (Control Panel)", "2. pPXF 연속광 공제 설명", "3. Hβ 성분 분해 설명", "4. 비리얼 블랙홀 질량 계산"])
 
 if menu == "1. 마스터 제어판 (Control Panel)":
-    st.subheader("⚙️ Spectrum Analysis Report Master Control Panel")
+    st.subheader("Spectrum Analysis Report Master Control Panel")
+    
+    # 외부 데이터베이스 및 템플릿 다운로드 빠른 링크 복구 (네이티브 버튼 스타일)
+    st.markdown("**외부 데이터베이스 및 템플릿 다운로드 빠른 링크**")
+    link_col1, link_col2, link_col3 = st.columns(3)
+    with link_col1:
+        st.link_button("SDSS DR19 CAS 바로가기", "https://cas.sdss.org/dr19", use_container_width=True)
+    with link_col2:
+        st.link_button("NASA IRSA Dust 조회", "https://irsa.ipac.caltech.edu/applications/DUST/", use_container_width=True)
+    with link_col3:
+        st.link_button("E-MILES 템플릿 다운로드", "https://cloud.iac.es/index.php/s/aYECNyEQfqgYwt4?dir=/E-MILES", use_container_width=True)
+    
+    st.write("---")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -182,32 +193,30 @@ if menu == "1. 마스터 제어판 (Control Panel)":
         manual_Av = st.text_input("성간소광량 Av (or None):", value=st.session_state.config["manual_Av"])
         Rv = st.number_input("Rv 상수 (기본 3.1):", value=st.session_state.config["Rv"], format="%.1f")
 
-    if st.button("🔄 제어판 데이터 시스템 동기화 (Apply)", use_container_width=True):
+    if st.button("제어판 데이터 시스템 동기화 (Apply)", use_container_width=True):
         st.session_state.metadata.update({"obj_name": obj_name.strip(), "ra": ra, "dec": dec, "obj_type": obj_type})
         st.session_state.config.update({"fits_file": fits_file, "emiles_file": emiles_file, "manual_Av": manual_Av, "Rv": Rv})
-        st.success("제어판 파라미터 세션 저장 완료!")
+        st.success("제어판 파라미터 세션 저장 완료")
 
     st.write("---")
-    st.markdown("### 🚀 과학 연산 파이프라인 가동")
+    st.markdown("### 과학 연산 파이프라인 가동")
     
-    if st.button("▶️ 적색편이 및 데이터 보정 파이프라인 가동", type="primary", use_container_width=True):
+    if st.button("적색편이 및 데이터 보정 파이프라인 가동", type="primary", use_container_width=True):
         if st.session_state.config["fits_file"] is None or st.session_state.config["emiles_file"] is None:
-            st.error("❌ 에러: FITS 파일과 템플릿 파일을 업로드한 후 동기화(Apply)를 먼저 진행해주세요.")
+            st.error("에러: FITS 파일과 템플릿 파일을 업로드한 후 동기화(Apply)를 먼저 진행해주세요.")
         else:
-            with st.spinner("⏳ 1단계 전처리 및 성간 소광 자동 연산 수행 중..."):
+            with st.spinner("1단계 전처리 및 성간 소광 자동 연산 수행 중..."):
                 try:
                     templates_list = setup_templates(st.session_state.config["emiles_file"])
                     w_obs, f_obs, s_obs, w_rest, f_corr, s_corr, calc_z, final_av = load_and_process_spectrum(
                         st.session_state.config["fits_file"], st.session_state.config["manual_Av"], st.session_state.config["Rv"]
                     )
                     
-                    # 💾 저장될 이미지 파일 경로 정의
                     path_p1 = os.path.join(IMAGE_DIR, "01_observed_frame.png")
                     path_p2 = os.path.join(IMAGE_DIR, "02_rest_frame.png")
                     path_p3 = os.path.join(IMAGE_DIR, "03_dust_comparison.png")
                     path_p4 = os.path.join(IMAGE_DIR, "04_emission_lines_zoom.png")
                     
-                    # 💾 데이터 스트림에 파일 매핑 주소록(saved_plots) 저장!
                     st.session_state.pipeline_data_stream.update({
                         "templates": templates_list, "wave_obs": w_obs, "flux_obs": f_obs, "sigma_obs": s_obs,
                         "wave_rest": w_rest, "flux_dereddened": f_corr, "sigma_dereddened": s_corr,
@@ -221,10 +230,9 @@ if menu == "1. 마스터 제어판 (Control Panel)":
                         "is_ready": True
                     })
                     
-                    st.success(f"🎉 전처리 완료! z: {calc_z:.6f} | Av: {final_av:.4f} mag (차트 백업 완료)")
+                    st.success(f"전처리 완료: z = {calc_z:.6f} | Av = {final_av:.4f} mag (차트 백업 완료)")
                     
-                    # 실시간 렌더링 수행 (동시에 내부 디스크 물리 저장 작동)
-                    st.markdown("#### 📉 실시간 물리 데이터 검수 그래프")
+                    st.markdown("#### 실시간 물리 데이터 검수 그래프")
                     st.pyplot(plot_observed_frame(w_obs, f_obs, s_obs, OBS_WAVE_RANGE, path_p1))
                     st.pyplot(plot_rest_frame_original(w_rest, f_obs, s_corr, REST_WAVE_RANGE, path_p2))
                     st.pyplot(plot_dust_correction_comparison(w_rest, f_obs, f_corr, REST_WAVE_RANGE, path_p3))
@@ -234,6 +242,10 @@ if menu == "1. 마스터 제어판 (Control Panel)":
                     st.error(f"파이프라인 연산 중 치명적 오류 발생: {e}")
 
 elif menu == "2. pPXF 연속광 공제 설명":
+    st.header("pPXF 항성 연속광 공제")
+    st.write("---")
+    if st.session_state.pipeline_data_stream["is_ready"]:
+        st.success(f"백업된 차트 주소록: {st.session_state.pipeline_data_stream['saved_plots']}")
     st.header("✨ pPXF 항성 연속광 공제")
     st.write("---")
     if st.session_state.pipeline_data_stream["is_ready"]:
