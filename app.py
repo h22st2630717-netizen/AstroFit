@@ -1,3 +1,6 @@
+from analyzer import SpectrumAnalyzer
+analyzer_engine = SpectrumAnalyzer()
+
 import streamlit as st
 import os
 import tarfile
