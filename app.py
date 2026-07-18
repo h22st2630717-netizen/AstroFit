@@ -46,10 +46,12 @@ if "pipeline_data_stream" not in st.session_state:
         "str_mass_center": None, "str_mass_range": None,
         "stellar_continuum": None, "gas_fit": None, "pp_object": None,
         "method3_data": {"has_run": False},
+        "method4_data": {"has_run": False},
         "saved_plots": {},   # 리포트 생성 엔진용 이미지 주소록
         "is_ready": False,
         "is_ppxf_ready": False,
-        "is_virial_ready": False
+        "is_virial_ready": False,
+        "is_msigma_ready": False
     }
 
 OBS_WAVE_RANGE  = (4300, 9500)
@@ -292,11 +294,39 @@ def plot_virial_continuum_fit(x_fit, y_fit, y_model, cont_y, broad_hb_y, narrow_
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     return fig
 
+def plot_m_sigma_relation(sigma_star, log_M_BH, sigma_star_err, log_M_BH_total_err, alpha, beta, intrinsic_scatter, save_path):
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    sigma_axis = np.linspace(60, 380, 200)
+    log_m_axis = alpha + beta * np.log10(sigma_axis / 200.0)
+
+    ax.plot(sigma_axis, log_m_axis, color='indigo', lw=1.5, label='McConnell & Ma (2013) Baseline')
+    ax.fill_between(sigma_axis, log_m_axis - intrinsic_scatter, log_m_axis + intrinsic_scatter,
+                     color='indigo', alpha=0.1, label=r'Intrinsic Scatter ($\pm$0.38 dex)')
+
+    if not np.isnan(log_M_BH):
+        ax.errorbar(sigma_star, log_M_BH, xerr=sigma_star_err, yerr=log_M_BH_total_err,
+                     fmt='*', color='crimson', markersize=14, elinewidth=1.5, capsize=4,
+                     label='Current Target Galaxy')
+
+    ax.set_xlabel(r"Stellar Velocity Dispersion $\sigma_*$ (km/s)", fontsize=11)
+    ax.set_ylabel(r"$\log_{10}(M_{\rm BH} / M_\odot)$", fontsize=11)
+    ax.set_title("Method 3: Bulge Stellar Dynamic Entropy Scaling ($M_{\bullet} - \sigma_*$ Relation)", fontsize=12, fontweight='bold', pad=12)
+
+    ax.set_xlim(60, 380)
+    ax.set_ylim(5.5, 10.5)
+    ax.grid(True, alpha=0.15, linestyle=':')
+    ax.legend(frameon=False, loc='upper left', fontsize=10)
+    ax.tick_params(direction='in', top=True, right=True)
+
+    plt.tight_layout()
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    return fig
+
 # ==============================================================================
 # [MENU NAVIGATION & UI CONTROL PANEL]
 # ==============================================================================
 st.sidebar.title("AstroFit 시스템")
-menu = st.sidebar.radio("이동할 페이지를 선택하세요:", ["1. 마스터 제어판 (Control Panel)", "2. pPXF 연속광 공제 설명", "3. Hβ 성분 분해 설명", "4. 비리얼 블랙홀 질량 계산"])
+menu = st.sidebar.radio("이동할 페이지를 선택하세요:", ["1. 마스터 제어판 (Control Panel)", "2. pPXF 연속광 공제 설명", "3. Hβ 성분 분해 설명", "4. 비리얼 블랙홀 질량 계산", "5. M-Sigma 관계식 설명"])
 
 if menu == "1. 마스터 제어판 (Control Panel)":
     st.subheader("Spectrum Analysis Report Master Control Panel")
@@ -649,6 +679,99 @@ if menu == "1. 마스터 제어판 (Control Panel)":
                 except Exception as e:
                     st.error(f"비리얼 프로파일 최적화 파이프라인 가동 중 오류 발생: {e}")
 
+    # ==============================================================================
+    # 4단계: 항성 속도 분산(σ*) 및 M-Sigma 관계식 기반 블랙홀 질량 산출 파이프라인
+    # ==============================================================================
+    st.write("---")
+    st.markdown("### 4단계: 항성 속도 분산 및 M-Sigma 관계식 기반 블랙홀 질량 산출 파이프라인 가동")
+
+    if st.button("M-Sigma 관계식 질량 계산 및 항성 동역학 분석 가동", type="primary", use_container_width=True):
+        if not st.session_state.pipeline_data_stream.get("is_ppxf_ready", False):
+            st.error("실행 실패: 2단계 pPXF 파이프라인의 가동 결과가 존재하지 않습니다. 본 방법론은 항성 흡수선의 속도 분산 지표를 사용하므로 2단계 버튼을 먼저 실행해주세요.")
+        else:
+            with st.spinner("Bulge 항성 동역학 오버랩 분석 및 정밀 오차 전파 연산 수행 중..."):
+                try:
+                    stream = st.session_state.pipeline_data_stream
+                    pp = stream["pp_object"]
+                    path_p8 = os.path.join(IMAGE_DIR, "08_m_sigma_relation_fit.png")
+
+                    sigma_star = pp.sol[0][1]
+                    try:
+                        sigma_star_err = pp.error[0][1] if (hasattr(pp, 'error') and pp.error is not None) else 5.0
+                    except:
+                        sigma_star_err = 5.0
+
+                    alpha = 8.32
+                    beta = 5.64
+                    intrinsic_scatter = 0.38
+
+                    if sigma_star > 0:
+                        log_M_BH = alpha + beta * np.log10(sigma_star / 200.0)
+                        M_BH = 10**log_M_BH
+
+                        log_M_BH_stat_err = beta * (1.0 / np.log(10)) * (sigma_star_err / sigma_star)
+                        log_M_BH_total_err = np.sqrt(log_M_BH_stat_err**2 + intrinsic_scatter**2)
+                        M_BH_total_err = M_BH * np.log(10) * log_M_BH_total_err
+
+                        log_upper = log_M_BH + log_M_BH_total_err
+                        log_lower = log_M_BH - log_M_BH_total_err
+
+                        M_upper = 10**log_upper
+                        M_lower = 10**log_lower
+
+                        delta_plus = M_upper - M_BH
+                        delta_minus = M_BH - M_lower
+                    else:
+                        log_M_BH, log_M_BH_stat_err, log_M_BH_total_err = np.nan, np.nan, np.nan
+                        M_BH, M_BH_total_err, M_lower, M_upper = np.nan, np.nan, np.nan, np.nan
+                        delta_plus, delta_minus = np.nan, np.nan
+
+                    str_mass_center = to_korean_shares(M_BH)
+                    str_mass_lower  = to_korean_shares(M_lower)
+                    str_mass_upper  = to_korean_shares(M_upper)
+
+                    st.session_state.pipeline_data_stream["method4_data"] = {
+                        "sigma_star": sigma_star,
+                        "sigma_star_err": sigma_star_err,
+                        "log_M_bh": log_M_BH,
+                        "log_M_bh_stat_err": log_M_BH_stat_err,
+                        "log_M_bh_total_err": log_M_BH_total_err,
+                        "M_bh": M_BH,
+                        "M_bh_err": M_BH_total_err,
+                        "delta_plus": delta_plus,
+                        "delta_minus": delta_minus,
+                        "str_mass_center": str_mass_center,
+                        "str_mass_range": f"{str_mass_lower} 배 ~ {str_mass_upper} 배",
+                        "plot_path": path_p8,
+                        "has_run": True
+                    }
+                    st.session_state.pipeline_data_stream["is_msigma_ready"] = True
+                    st.session_state.pipeline_data_stream["saved_plots"].update({"m_sigma_fit": path_p8})
+
+                    st.success(f"4단계 파이프라인 분석 완료: 중심 블랙홀 질량 = 태양의 약 {str_mass_center} 배")
+
+                    st.markdown("#### M-Sigma 관계식 물리 파라미터 측정 명세")
+                    m4_col1, m4_col2 = st.columns(2)
+                    with m4_col1:
+                        st.metric(label="항성 속도 분산 (sigma_*)", value=f"{sigma_star:.2f} ± {sigma_star_err:.2f} km/s")
+                        st.text(f"적용 모델: McConnell & Ma (2013) Early-Type")
+                    with m4_col2:
+                        st.metric(label="M-Sigma 블랙홀 질량 (대표값)", value=f"태양 질량의 {str_mass_center} 배")
+                        st.text(f"계통 오차 반영 로그값: Log(M_BH/M_sun) = {log_M_BH:.3f} ± {log_M_BH_total_err:.3f}")
+
+                    if not np.isnan(M_BH):
+                        st.markdown("##### 선형 공간 비대칭 오차 구간 정보")
+                        st.text(f"비대칭 선형 표기: M_bh = ({M_BH/1e6:.2f} +{delta_plus/1e6:.2f} / -{delta_minus/1e6:.2f}) x 10^6 M_sun")
+                        st.text(f"1-sigma 신뢰구간 범위: 태양 질량의 {str_mass_lower} 배 ~ {str_mass_upper} 배 사이")
+
+                    st.markdown("#### Bulge 항성 동역학 스케일링 검수 그래프")
+                    fig_msigma = plot_m_sigma_relation(sigma_star, log_M_BH, sigma_star_err, log_M_BH_total_err, alpha, beta, intrinsic_scatter, path_p8)
+                    st.pyplot(fig_msigma)
+                    plt.close(fig_msigma)
+
+                except Exception as e:
+                    st.error(f"M-Sigma 최적화 파이프라인 가동 중 오류 발생: {e}")
+
 elif menu == "2. pPXF 연속광 공제 설명":
     st.header("pPXF 항성 연속광 공제")
     st.write("---")
@@ -672,3 +795,20 @@ elif menu == "3. Hβ 성분 분해 설명":
 elif menu == "4. 비리얼 블랙홀 질량 계산":
     st.header("비리얼 정리 기반 블랙홀 질량 계산")
     st.write("---")
+    if st.session_state.pipeline_data_stream["is_virial_ready"]:
+        m3_res = st.session_state.pipeline_data_stream["method3_data"]
+        st.success(f"현재 로드된 천체 {st.session_state.metadata['obj_name']}의 비리얼 관계식 산출 연산이 완료된 상태입니다.")
+        st.write(f"비리얼 블랙홀 질량 대표값: 태양 질량의 {m3_res['str_mass_center']} 배")
+    else:
+        st.info("1번 제어판에서 3단계 파이프라인을 가동하여 피팅 분석을 완료해 주세요.")
+
+elif menu == "5. M-Sigma 관계식 설명":
+    st.header("M-Sigma 관계식 기반 블랙홀 질량 계산")
+    st.write("---")
+    if st.session_state.pipeline_data_stream["is_msigma_ready"]:
+        m4_res = st.session_state.pipeline_data_stream["method4_data"]
+        st.success(f"현재 로드된 천체 {st.session_state.metadata['obj_name']}의 M-Sigma 관계식 산출 연산이 완료된 상태입니다.")
+        st.write(f"추출된 항성 속도 분산 (sigma_*): {m4_res['sigma_star']:.2f} km/s")
+        st.write(f"최종 블랙홀 질량 로그값: {m4_res['log_M_bh']:.3f} dex")
+    else:
+        st.info("1번 제어판에서 4단계 파이프라인을 가동하여 피팅 분석을 완료해 주세요.")
