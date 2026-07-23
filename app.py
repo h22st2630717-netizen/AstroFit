@@ -355,8 +355,8 @@ if menu == "1. 마스터 제어판 (Control Panel)":
 
     with col2:
         st.markdown("### [B] 백엔드 데이터 실측 적용")
-        fits_file = st.file_uploader("SDSS FITS 파일 선택 (.fits)", type=["fits", "fits.gz"])
-        emiles_file = st.file_uploader("E-MILES 템플릿 파일 선택 (.tar.gz)", type=["gz", "tar.gz"])
+        fits_file = st.file_uploader("SDSS FITS 파일 선택 (.fits)")
+        emiles_file = st.file_uploader("E-MILES 템플릿 파일 선택 (.tar.gz)")
         manual_Av = st.text_input("성간소광량 Av (or None):", value=st.session_state.config["manual_Av"])
         Rv = st.number_input("Rv 상수 (기본 3.1):", value=st.session_state.config["Rv"], format="%.1f")
 
