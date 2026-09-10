@@ -336,7 +336,7 @@ if menu == "1. 마스터 제어판 (Control Panel)":
     st.markdown("**외부 데이터베이스 및 템플릿 다운로드 빠른 링크**")
     link_col1, link_col2, link_col3 = st.columns(3)
     with link_col1:
-        st.link_button("SDSS DR19 CAS 바로가기", "https://cas.sdss.org/dr19", use_container_width=True)
+        st.link_button("SDSS DR19 CAS 바로가기", "https://skyserver.sdss.org/dr20", use_container_width=True)
     with link_col2:
         st.link_button("NASA IRSA Dust 조회", "https://irsa.ipac.caltech.edu/applications/DUST/", use_container_width=True)
     with link_col3:
